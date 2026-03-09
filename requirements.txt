@@ -1,0 +1,5 @@
+fastapi
+uvicorn
+twilio
+groq
+python-multipart
