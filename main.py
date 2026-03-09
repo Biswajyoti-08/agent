@@ -22,7 +22,7 @@ async def whatsapp_webhook(Body: str = Form(...), From: str = Form(...)):
                     "content": Body,
                 }
             ],
-            model="llama3-8b-8192",
+            model="llama-3.1-8b-instant",
         )
         ai_reply = chat_completion.choices[0].message.content
         
@@ -39,3 +39,4 @@ async def whatsapp_webhook(Body: str = Form(...), From: str = Form(...)):
 @app.get("/")
 def read_root():
     return {"status": "Live Agent Webhook is Online!"}
+
