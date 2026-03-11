@@ -3,4 +3,3 @@ uvicorn
 groq
 pymongo
 requests
-certifi
