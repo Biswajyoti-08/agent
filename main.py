@@ -1,5 +1,6 @@
 import os
 import requests
+import certifi  # <-- NEW: Added SSL certificate package
 from fastapi import FastAPI, Request
 from pymongo import MongoClient
 from groq import Groq
@@ -12,7 +13,8 @@ kapso_api_key = os.environ.get("KAPSO_API_KEY")
 
 # Connect to MongoDB Atlas
 mongo_uri = os.environ.get("MONGO_URI")
-mongo_client = MongoClient(mongo_uri)
+# NEW: Tell PyMongo to use the certifi certificates for the SSL connection
+mongo_client = MongoClient(mongo_uri, tlsCAFile=certifi.where()) 
 db = mongo_client["WhatsAppAgent"]
 chat_history = db["ChatHistory"]
 
@@ -30,7 +32,6 @@ def send_whatsapp_message(phone_number: str, text: str):
             "message_type": "text"
         }
     }
-    # DEBUG: Print Kapso's response to see if they reject our outgoing message!
     response = requests.post(url, headers=headers, json=payload)
     print(f"Kapso Send API Response: {response.status_code} - {response.text}")
 
@@ -39,32 +40,21 @@ async def kapso_webhook(request: Request):
     payload = await request.json()
     event_type = request.headers.get("X-Webhook-Event")
 
-    # DEBUG: Print exactly what Kapso sends to our server
-    print(f"--- NEW WEBHOOK RECEIVED ---")
-    print(f"Event Type: {event_type}")
-    print(f"Raw Payload: {payload}")
-
-    # Loosened the filter to ensure we catch the message
     if event_type == "whatsapp.message.received" or "message" in payload:
         
-        # THE FIX: Safely extract phone and text matching Kapso's exact payload
         message_data = payload.get("message", {})
-        
-        # The sender's number is in the 'from' or 'phone_number' field
         sender_phone = message_data.get("from") or message_data.get("phone_number")
         
-        # Kapso nests the actual text inside a 'text' dictionary under 'body'
         text_data = message_data.get("text", {})
         user_text = text_data.get("body", "")
 
         if not sender_phone or not user_text:
-            print("Ignored: Missing phone number or text content.")
             return {"status": "ignored"}
 
         print(f"Processing message from {sender_phone}: {user_text}")
 
         try:
-            # Memory: Fetch the last 5 messages from MongoDB
+            # Memory: Fetch the last 5 messages
             history_cursor = chat_history.find({"phone_number": sender_phone}).sort("_id", -1).limit(5)
             history_docs = list(history_cursor)
             history_docs.reverse()
