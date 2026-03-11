@@ -47,13 +47,15 @@ async def kapso_webhook(request: Request):
     # Loosened the filter to ensure we catch the message
     if event_type == "whatsapp.message.received" or "message" in payload:
         
-        # Safely extract phone and text depending on Kapso's payload structure
-        if "message" in payload and isinstance(payload["message"], dict):
-            sender_phone = payload["message"].get("phone_number")
-            user_text = payload["message"].get("content", "")
-        else:
-            sender_phone = payload.get("phone_number")
-            user_text = payload.get("content", "")
+        # THE FIX: Safely extract phone and text matching Kapso's exact payload
+        message_data = payload.get("message", {})
+        
+        # The sender's number is in the 'from' or 'phone_number' field
+        sender_phone = message_data.get("from") or message_data.get("phone_number")
+        
+        # Kapso nests the actual text inside a 'text' dictionary under 'body'
+        text_data = message_data.get("text", {})
+        user_text = text_data.get("body", "")
 
         if not sender_phone or not user_text:
             print("Ignored: Missing phone number or text content.")
