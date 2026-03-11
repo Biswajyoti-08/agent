@@ -1,5 +1,6 @@
 import os
 import requests
+import certifi
 from fastapi import FastAPI, Request
 from pymongo import MongoClient
 from groq import Groq
@@ -10,10 +11,9 @@ app = FastAPI()
 groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 kapso_api_key = os.environ.get("KAPSO_API_KEY")
 
-# 2. Connect to MongoDB Atlas
+# 2. Connect to MongoDB Atlas (Using proper certifi certificates)
 mongo_uri = os.environ.get("MONGO_URI")
-# THE FIX: Force the connection and bypass Render's internal SSL certificate errors
-mongo_client = MongoClient(mongo_uri, tls=True, tlsAllowInvalidCertificates=True)
+mongo_client = MongoClient(mongo_uri, tlsCAFile=certifi.where()) 
 db = mongo_client["WhatsAppAgent"]
 chat_history = db["ChatHistory"]
 
@@ -41,7 +41,6 @@ async def kapso_webhook(request: Request):
 
     if event_type == "whatsapp.message.received" or "message" in payload:
         
-        # Extract phone and text matching Kapso's exact payload
         message_data = payload.get("message", {})
         sender_phone = message_data.get("from") or message_data.get("phone_number")
         
@@ -67,7 +66,6 @@ async def kapso_webhook(request: Request):
                 messages.append({"role": "user", "content": doc["user_msg"]})
                 messages.append({"role": "assistant", "content": doc["ai_reply"]})
 
-            # Add the current message
             messages.append({"role": "user", "content": user_text})
 
             # Generate AI Reply
