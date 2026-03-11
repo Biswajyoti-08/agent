@@ -1,5 +1,5 @@
 fastapi
 uvicorn
-twilio
 groq
-python-multipart
+pymongo
+requests
