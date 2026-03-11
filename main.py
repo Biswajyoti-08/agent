@@ -6,11 +6,11 @@ from groq import Groq
 
 app = FastAPI()
 
-# 1. Initialize API Clients
+# Initialize API Clients
 groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 kapso_api_key = os.environ.get("KAPSO_API_KEY")
 
-# 2. Connect to MongoDB Atlas
+# Connect to MongoDB Atlas
 mongo_uri = os.environ.get("MONGO_URI")
 mongo_client = MongoClient(mongo_uri)
 db = mongo_client["WhatsAppAgent"]
@@ -30,62 +30,74 @@ def send_whatsapp_message(phone_number: str, text: str):
             "message_type": "text"
         }
     }
-    requests.post(url, headers=headers, json=payload)
+    # DEBUG: Print Kapso's response to see if they reject our outgoing message!
+    response = requests.post(url, headers=headers, json=payload)
+    print(f"Kapso Send API Response: {response.status_code} - {response.text}")
 
 @app.post("/webhook")
 async def kapso_webhook(request: Request):
     payload = await request.json()
     event_type = request.headers.get("X-Webhook-Event")
 
-    # Kapso sends many events (delivered, read, etc). We only want new incoming messages!
-    if event_type == "whatsapp.message.received":
-        message_data = payload.get("message", {})
-        sender_phone = message_data.get("phone_number")
-        user_text = message_data.get("content", "")
+    # DEBUG: Print exactly what Kapso sends to our server
+    print(f"--- NEW WEBHOOK RECEIVED ---")
+    print(f"Event Type: {event_type}")
+    print(f"Raw Payload: {payload}")
 
-        # Ignore if it is an image or empty message for now
+    # Loosened the filter to ensure we catch the message
+    if event_type == "whatsapp.message.received" or "message" in payload:
+        
+        # Safely extract phone and text depending on Kapso's payload structure
+        if "message" in payload and isinstance(payload["message"], dict):
+            sender_phone = payload["message"].get("phone_number")
+            user_text = payload["message"].get("content", "")
+        else:
+            sender_phone = payload.get("phone_number")
+            user_text = payload.get("content", "")
+
         if not sender_phone or not user_text:
+            print("Ignored: Missing phone number or text content.")
             return {"status": "ignored"}
 
-        # 3. Memory: Fetch the last 5 messages from MongoDB
-        history_cursor = chat_history.find({"phone_number": sender_phone}).sort("_id", -1).limit(5)
-        history_docs = list(history_cursor)
-        history_docs.reverse() # Put in chronological order
+        print(f"Processing message from {sender_phone}: {user_text}")
 
-        # 4. Build the prompt with history
-        messages = [
-            {"role": "system", "content": "You are a helpful AI WhatsApp agent. Keep answers brief and friendly. You remember context from previous messages."}
-        ]
-        
-        for doc in history_docs:
-            messages.append({"role": "user", "content": doc["user_msg"]})
-            messages.append({"role": "assistant", "content": doc["ai_reply"]})
-
-        # Add the brand new message
-        messages.append({"role": "user", "content": user_text})
-
-        # 5. Generate AI Reply
         try:
+            # Memory: Fetch the last 5 messages from MongoDB
+            history_cursor = chat_history.find({"phone_number": sender_phone}).sort("_id", -1).limit(5)
+            history_docs = list(history_cursor)
+            history_docs.reverse()
+
+            messages = [
+                {"role": "system", "content": "You are a helpful AI WhatsApp agent. Keep answers brief and friendly. You remember context from previous messages."}
+            ]
+            
+            for doc in history_docs:
+                messages.append({"role": "user", "content": doc["user_msg"]})
+                messages.append({"role": "assistant", "content": doc["ai_reply"]})
+
+            messages.append({"role": "user", "content": user_text})
+
+            # Generate AI Reply
             chat_completion = groq_client.chat.completions.create(
                 messages=messages,
                 model="llama-3.1-8b-instant",
             )
             ai_reply = chat_completion.choices[0].message.content
+            print(f"AI Reply Generated: {ai_reply}")
+
+            # Memory: Save to database
+            chat_history.insert_one({
+                "phone_number": sender_phone,
+                "user_msg": user_text,
+                "ai_reply": ai_reply
+            })
+
+            # Send back to WhatsApp
+            send_whatsapp_message(sender_phone, ai_reply)
+            
         except Exception as e:
-            print(f"Groq Error: {e}")
-            ai_reply = "Oops! My AI brain hit a slight glitch."
+            print(f"System Error during generation or DB save: {e}")
 
-        # 6. Memory: Save this exact conversation to the database
-        chat_history.insert_one({
-            "phone_number": sender_phone,
-            "user_msg": user_text,
-            "ai_reply": ai_reply
-        })
-
-        # 7. Send the reply back to the user
-        send_whatsapp_message(sender_phone, ai_reply)
-
-    # Always return 200 OK so Kapso knows we received the webhook
     return {"status": "success"}
 
 @app.get("/")
