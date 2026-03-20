@@ -1,7 +1,7 @@
 import requests
 
 # URL of your FastAPI server
-URL = "http://127.0.0.1:8000/webhook" 
+URL = "https://agent-bjjq.onrender.com/webhook" 
 
 # Mocking the WhatsApp Location Event
 payload = {
