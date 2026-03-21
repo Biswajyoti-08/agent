@@ -19,100 +19,108 @@ mongo_client = MongoClient(mongo_uri, tlsCAFile=certifi.where())
 db = mongo_client["WhatsAppAgent"]
 chat_history = db["ChatHistory"]
 
-# --- DUMMY DATA: Enriched Store Registry (Problem 1) ---
 STORES = [
     {
-        "id": "ST_001",
-        "name": "Jayanagar Showroom",
-        "lat": 12.9307, "lon": 77.5838,
-        "manager_phone": "9194377XXXXX", 
-        "open": "09:00", "close": "20:00",
-        "load": 0.4 
+        "id": "NIKE_001",
+        "name": "Nike Flagship - Brigade Road",
+        "lat": 12.9719, "lon": 77.6070,
+        "manager_phone": "919437725393", 
+        "open": "09:00", "close": "22:00",
+        "load": 0.3 # Capacity: 30% full
     },
     {
-        "id": "ST_002",
-        "name": "Indiranagar Hub",
-        "lat": 12.9719, "lon": 77.6412,
-        "manager_phone": "9188223XXXXX",
-        "open": "10:00", "close": "21:00",
-        "load": 0.9 
+        "id": "NIKE_002",
+        "name": "Nike Hub - Indiranagar",
+        "lat": 12.9784, "lon": 77.6408,
+        "manager_phone": "91XXXXXXXXXX", 
+        "open": "10:00", "close": "21:30",
+        "load": 0.5 # Capacity: 50% full
     }
 ]
 
-# --- UTILS: Distance & Routing Logic ---
+# --- UTILS: Haversine Distance Logic ---
 def get_distance(lat1, lon1, lat2, lon2):
-    R = 6371
+    R = 6371 # Earth radius in KM
     dlat, dlon = math.radians(lat2-lat1), math.radians(lon2-lon1)
     a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon/2)**2
     return R * 2 * math.asin(math.sqrt(a))
 
 def find_best_store(u_lat, u_lon):
     now = datetime.now().strftime("%H:%M")
-    print(f"Checking stores at current time: {now}", flush=True)
     valid_stores = []
     for s in STORES:
-        # Debugging store status
         is_open = s["open"] <= now <= s["close"]
-        is_not_busy = s["load"] < 0.85
-        if is_open and is_not_busy:
+        is_available = s["load"] < 0.85 # Redirect if store is > 85% busy
+        if is_open and is_available:
             s["dist"] = get_distance(u_lat, u_lon, s["lat"], s["lon"])
             valid_stores.append(s)
-            print(f"Store {s['name']} is valid. Distance: {s['dist']}km", flush=True)
-        else:
-            print(f"Store {s['name']} skipped. Open: {is_open}, Not Busy: {is_not_busy}", flush=True)
-            
+    
     return min(valid_stores, key=lambda x: x["dist"]) if valid_stores else None
 
 def send_whatsapp_message(phone_number: str, text: str):
     url = "https://app.kapso.ai/api/v1/whatsapp_messages"
     headers = {"X-API-Key": kapso_api_key, "Content-Type": "application/json"}
-    payload = {"message": {"phone_number": phone_number, "content": text, "message_type": "text"}}
-    resp = requests.post(url, headers=headers, json=payload)
-    print(f"Message sent to {phone_number}. Status: {resp.status_code}", flush=True)
+    payload = {
+        "message": {
+            "phone_number": phone_number, 
+            "content": text, 
+            "message_type": "text"
+        }
+    }
+    response = requests.post(url, headers=headers, json=payload)
+    print(f"Message to {phone_number} | Status: {response.status_code}", flush=True)
 
 @app.post("/webhook")
 async def kapso_webhook(request: Request):
     payload = await request.json()
-    print(f"Received Webhook Payload: {payload}", flush=True)
+    print(f"DEBUG: Payload Received: {payload}", flush=True)
     
     message_data = payload.get("message", {})
     sender_phone = message_data.get("from") or message_data.get("phone_number")
 
-    # --- FEATURE: LOCATION SHARED (Problem 1 Execution) ---
+    # --- FEATURE: LOCATION SHARED (Nike Hyper-Local Routing) ---
     location = message_data.get("location")
     if location:
         u_lat, u_lon = location.get("latitude"), location.get("longitude")
-        print(f"Location detected: {u_lat}, {u_lon} from {sender_phone}", flush=True)
-        
         best = find_best_store(u_lat, u_lon)
         
         if best:
-            reply = f"📍 Great news! Our {best['name']} is just {round(best['dist'], 1)}km away and has an advisor ready for you. Should I book your VIP slot?"
-            print(f"Best store found: {best['name']}. Notifying manager...", flush=True)
+            # Step 3: Smooth Google Maps Link
+            maps_url = f"https://www.google.com/maps?q={best['lat']},{best['lon']}"
             
-            # ALERT MANAGER
-            send_whatsapp_message(best["manager_phone"], f"🚨 REDIRECT ALERT: Customer {sender_phone} is nearby and looking to visit {best['name']}. Please be ready.")
+            reply = (f"👟 *Athlete, great news!* \n\n"
+                     f"Our *{best['name']}* is just {round(best['dist'], 1)}km away and has an advisor ready for your Trial Run. \n\n"
+                     f"📍 *Get directions here:* {maps_url} \n\n"
+                     f"Should I notify the Store Manager you're on your way? Just Do It.")
+            
+            # ALERT MANAGER (Handoff Alert)
+            manager_msg = f"🚨 *NIKE ONGROUND ALERT*: Athlete {sender_phone} is nearby and heading to {best['name']}. Please prepare for their visit! 🏁"
+            send_whatsapp_message(best["manager_phone"], manager_msg)
         else:
-            reply = "I couldn't find a nearby showroom currently available. Would you like me to schedule a callback?"
-            print("No valid stores found.", flush=True)
+            reply = "I couldn't find a Nike Hub currently available nearby. Would you like me to schedule a virtual concierge call?"
         
         send_whatsapp_message(sender_phone, reply)
         return {"status": "redirect_success"}
 
-    # --- STANDARD CHAT FLOW ---
+    # --- STANDARD CHAT FLOW (Nike Persona) ---
     text_data = message_data.get("text", {})
     user_text = text_data.get("body", "")
-    if not sender_phone or not user_text: 
-        print("Ignoring message: No phone or text body.", flush=True)
-        return {"status": "ignored"}
-
-    print(f"Processing text message: {user_text}", flush=True)
+    if not sender_phone or not user_text: return {"status": "ignored"}
 
     try:
         history = list(chat_history.find({"phone_number": sender_phone}).sort("_id", -1).limit(5))
         history.reverse()
 
-        messages = [{"role": "system", "content": "You are a Showroom AI Agent. If a user wants to visit, see a car, or take a test drive, kindly ask them to 'Share their Location' so you can find the nearest available branch."}]
+        # Step 2: Branded System Prompt
+        messages = [{
+            "role": "system", 
+            "content": """You are the 'OnGround.ai' Digital Manager for Nike India. 
+            Your tone is athletic, premium, and professional. 
+            - Refer to customers as 'Athletes'. 
+            - If they ask about shoes (Air Max, Jordan, etc.) or visiting a store, answer briefly and say 'The best way to find your perfect fit is a Trial Run at our store'.
+            - ALWAYS nudge them to 'Share Location' so you can check live inventory at the nearest Nike Hub.
+            - End interactions with 'Just Do It.'"""
+        }]
         
         for doc in history:
             messages.append({"role": "user", "content": doc["user_msg"]})
@@ -123,13 +131,22 @@ async def kapso_webhook(request: Request):
         completion = groq_client.chat.completions.create(messages=messages, model="llama-3.1-8b-instant")
         ai_reply = completion.choices[0].message.content
 
-        chat_history.insert_one({"phone_number": sender_phone, "user_msg": user_text, "ai_reply": ai_reply})
+        # Save to DB with metadata for Problem 2 (Retention)
+        chat_history.insert_one({
+            "phone_number": sender_phone, 
+            "user_msg": user_text, 
+            "ai_reply": ai_reply,
+            "timestamp": datetime.utcnow(), 
+            "is_handled": False, # Will be used by the Watchdog script
+            "brand": "Nike"
+        })
+        
         send_whatsapp_message(sender_phone, ai_reply)
 
     except Exception as e:
-        print(f"Error in chat flow: {e}", flush=True)
+        print(f"Error: {e}", flush=True)
 
     return {"status": "success"}
 
 @app.get("/")
-def read_root(): return {"status": "Manager Persona Agent Online"}
+def read_root(): return {"status": "OnGround.ai Nike Manager Online"}
