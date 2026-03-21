@@ -1,24 +1,18 @@
-[
-  {
-    "store_id": "ST_BLR_01",
-    "name": "Jayanagar Showroom",
-    "lat": 12.9307, 
-    "long": 77.5838,
-    "manager_phone": "9194377XXXXX",
-    "open_time": "09:00",
-    "close_time": "20:00",
-    "active_chats": 12,
-    "max_capacity": 15
-  },
-  {
-    "store_id": "ST_BLR_02",
-    "name": "Indiranagar Hub",
-    "lat": 12.9719,
-    "long": 77.6412,
-    "manager_phone": "9188223XXXXX",
-    "open_time": "10:00",
-    "close_time": "21:00",
-    "active_chats": 4,
-    "max_capacity": 15
-  }
+STORES = [
+    {
+        "id": "NIKE_001",
+        "name": "Nike Flagship - Brigade Road",
+        "lat": 12.9719, "lon": 77.6070,
+        "manager_phone": "919437725393",
+        "open": "10:00", "close": "22:00",
+        "load": 0.3
+    },
+    {
+        "id": "NIKE_002",
+        "name": "Nike Hub - Indiranagar",
+        "lat": 12.9784, "lon": 77.6408,
+        "manager_phone": "91XXXXXXXXXX", 
+        "open": "10:00", "close": "21:30",
+        "load": 0.5
+    }
 ]
