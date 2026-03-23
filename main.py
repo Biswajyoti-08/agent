@@ -32,7 +32,7 @@ STORES = [
         "id": "NIKE_002",
         "name": "Nike Hub - Indiranagar",
         "lat": 12.9784, "lon": 77.6408,
-        "manager_phone": "91XXXXXXXXXX", 
+        "manager_phone": "918280244245", 
         "open": "10:00", "close": "21:30",
         "load": 0.5 # Capacity: 50% full
     }
