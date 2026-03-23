@@ -3,25 +3,25 @@ import datetime
 from pymongo import MongoClient
 import certifi
 import requests
-from dotenv import load_dotenv
 
-# Load local .env if you are running this on your desktop
-load_dotenv()
+# 1. Hardcoded Credentials for Local Demo
+MONGO_URI = "mongodb+srv://mohapatrasamanta25_db_user:oKAcibWmspK0cbgP@cluster0.61vmyt1.mongodb.net/?appName=Cluster0"
+KAPSO_API_KEY = "d7a9dd3a062d70357c9cd21b1f3d81f8644e4fe0a0c0d41dd3dec7a38cf3810e"
 
-# 1. Setup Connections
-MONGO_URI = os.environ.get("MONGO_URI")
-KAPSO_API_KEY = os.environ.get("KAPSO_API_KEY")
-
-client = MongoClient(MONGO_URI, tlsCAFile=certifi.where())
-db = client["WhatsAppAgent"]
-chat_history = db["ChatHistory"]
+# 2. Setup MongoDB Connection
+try:
+    client = MongoClient(MONGO_URI, tlsCAFile=certifi.where())
+    db = client["WhatsAppAgent"]
+    chat_history = db["ChatHistory"]
+    print("✅ Connected to MongoDB Atlas successfully.")
+except Exception as e:
+    print(f"❌ MongoDB Connection Error: {e}")
 
 def send_whatsapp_escalation(manager_phone, customer_phone, last_msg):
-    """Fires the high-priority alert to the Manager/Regional Head"""
+    """Fires the high-priority alert to the Manager"""
     url = "https://app.kapso.ai/api/v1/whatsapp_messages"
     headers = {"X-API-Key": KAPSO_API_KEY, "Content-Type": "application/json"}
     
-    # Professional B2B Escalation Template
     text = (
         f"🚨 *ON-GROUND: LEAD DECAY ALERT*\n\n"
         f"Athlete *{customer_phone}* is stalling!\n"
@@ -38,24 +38,20 @@ def send_whatsapp_escalation(manager_phone, customer_phone, last_msg):
         }
     }
     
-    try:
-        response = requests.post(url, headers=headers, json=payload)
-        if response.status_code in [200, 201]:
-            print(f"✅ Escalated lead {customer_phone} to Manager {manager_phone}")
-        else:
-            print(f"❌ Failed to escalate. Status: {response.status_code} | {response.text}")
-    except Exception as e:
-        print(f"❌ Error during API call: {e}")
+    response = requests.post(url, headers=headers, json=payload)
+    if response.status_code in [200, 201]:
+        print(f"🚀 Escalated lead {customer_phone} to Manager {manager_phone}")
+    else:
+        print(f"❌ Kapso Error: {response.status_code} | {response.text}")
 
 def run_retention_audit():
-    print(f"🔍 Auditor Active... Checking for ghosted Nike leads.")
+    print(f"🔍 Auditor Active... Checking for ghosted leads.")
     
-    # DEMO THRESHOLD: 1 minute (Change to 'hours=24' for production)
+    # DEMO THRESHOLD: 1 minute 
+    # (Matches the timestamp format saved in your main.py)
     threshold = datetime.datetime.utcnow() - datetime.timedelta(minutes=1)
     
-    # Find leads where:
-    # 1. is_handled is False (AI is still in charge)
-    # 2. Last message is older than the threshold
+    # Find leads that are NOT handled and were last updated > 1 min ago
     stalled_leads = chat_history.find({
         "is_handled": False,
         "timestamp": {"$lt": threshold}
@@ -65,16 +61,15 @@ def run_retention_audit():
     for lead in stalled_leads:
         found_leads = True
         customer = lead.get("phone_number")
-        last_msg = lead.get("user_msg", "Unknown Inquiry")
+        last_msg = lead.get("user_msg", "New lead intent detected.")
         
-        # For the PoC, we escalate to your primary testing number
-        # In scale, this would lookup the Store Manager's number from the 'Stores' DB
+        # Using your phone number for the escalation alert
         manager_to_alert = "919437725393" 
         
         send_whatsapp_escalation(manager_to_alert, customer, last_msg)
 
     if not found_leads:
-        print("✅ No lead leakage detected. All athletes are being served.")
+        print("✨ All athletes are currently being served. No lead leakage.")
 
 if __name__ == "__main__":
     run_retention_audit()
