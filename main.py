@@ -28,11 +28,9 @@ STORES = [
 
 # --- SIMULATED ENTERPRISE INTEGRATIONS ---
 def sync_to_zoho_crm(phone, status):
-    """Simulates updating a Lead record in Zoho CRM"""
     print(f"☁️ [ZOHO CRM] Syncing Lead {phone} | New Status: {status}", flush=True)
 
 def sync_to_sap_erp(phone, action):
-    """Simulates logging a transaction/handoff event in SAP"""
     print(f"⚙️ [SAP ERP] Logging System Event: {action} for Athlete {phone}", flush=True)
 
 # --- UTILS ---
@@ -62,7 +60,9 @@ async def kapso_webhook(request: Request):
     user_text = message_data.get("text", {}).get("body", "").strip()
     user_text_low = user_text.lower()
 
-    # --- 1. HYBRID HANDOVER LOGIC (The Claim/Release Toggle) ---
+    if not sender_phone or not user_text: return {"status": "ignored"}
+
+    # --- 1. HYBRID COMMANDS (Immediate Response) ---
     if user_text_low == "claim":
         chat_history.update_many({"phone_number": sender_phone}, {"$set": {"is_handled": True}})
         sync_to_zoho_crm(sender_phone, "HUMAN_IN_PROGRESS")
@@ -77,7 +77,14 @@ async def kapso_webhook(request: Request):
         send_whatsapp_message(sender_phone, "🤖 *System:* AI is back online. How else can I assist you, Athlete? Just Do It.")
         return {"status": "released"}
 
-    # --- 2. LOCATION LOGIC ---
+    # --- 2. THE SILENCE CHECK (The Gatekeeper) ---
+    # We check if a manager HAS ALREADY claimed this specific athlete
+    last_doc = chat_history.find_one({"phone_number": sender_phone}, sort=[("_id", -1)])
+    if last_doc and last_doc.get("is_handled") == True:
+        print(f"🚫 AI SILENCED for {sender_phone} (Manager Active)", flush=True)
+        return {"status": "human_active"}
+
+    # --- 3. LOCATION LOGIC ---
     location = message_data.get("location")
     if location:
         u_lat, u_lon = location.get("latitude"), location.get("longitude")
@@ -90,20 +97,13 @@ async def kapso_webhook(request: Request):
             send_whatsapp_message(sender_phone, reply)
             return {"status": "redirected"}
 
-    # --- 3. AI CHAT FLOW ---
-    if not sender_phone or not user_text: return {"status": "ignored"}
-
+    # --- 4. AI CHAT FLOW (First Responder Mode) ---
     try:
-        # Check if Human is in control
-        last_interaction = chat_history.find_one({"phone_number": sender_phone}, sort=[("_id", -1)])
-        if last_interaction and last_interaction.get("is_handled"):
-            print(f"🚫 AI SILENCED for {sender_phone} (Manager Active)", flush=True)
-            return {"status": "human_active"}
-
-        # Fetch History & Generate AI Response
+        # Fetch Context
         history = list(chat_history.find({"phone_number": sender_phone}).sort("_id", -1).limit(5))
         history.reverse()
-        messages = [{"role": "system", "content": "You are the Nike Digital Manager. Tone: Athletic/Premium. Refer to users as 'Athletes'. End with 'Just Do It.'"}]
+        
+        messages = [{"role": "system", "content": "You are the Nike Digital Manager. Tone: Athletic. Refer to users as 'Athletes'. End with 'Just Do It.'"}]
         for doc in history:
             messages.append({"role": "user", "content": doc["user_msg"]})
             messages.append({"role": "assistant", "content": doc["ai_reply"]})
@@ -112,10 +112,13 @@ async def kapso_webhook(request: Request):
         completion = groq_client.chat.completions.create(messages=messages, model="llama-3.1-8b-instant")
         ai_reply = completion.choices[0].message.content
 
-        # Save to DB with metadata
+        # Save to DB - is_handled is FALSE by default so the Watchdog can monitor it
         chat_history.insert_one({
-            "phone_number": sender_phone, "user_msg": user_text, "ai_reply": ai_reply,
-            "timestamp": datetime.utcnow(), "is_handled": False
+            "phone_number": sender_phone, 
+            "user_msg": user_text, 
+            "ai_reply": ai_reply,
+            "timestamp": datetime.utcnow(), 
+            "is_handled": False
         })
         send_whatsapp_message(sender_phone, ai_reply)
 
@@ -125,4 +128,4 @@ async def kapso_webhook(request: Request):
     return {"status": "success"}
 
 @app.get("/")
-def read_root(): return {"status": "OnGround.ai Hybrid Enterprise Engine Online"}
+def read_root(): return {"status": "OnGround.ai First-Responder Engine Online"}
