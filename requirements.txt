@@ -1,6 +1,8 @@
 fastapi
 uvicorn
 groq
-pymongo
+pymongo[srv]
 requests
 certifi
+python-dotenv
+python-multipart
