@@ -1,33 +1,32 @@
 import os
-import datetime
-from pymongo import MongoClient
+import time
 import certifi
 import requests
+from pymongo import MongoClient
+from datetime import datetime, timedelta
 
-# 1. Hardcoded Credentials for Local Demo
 MONGO_URI = "mongodb+srv://mohapatrasamanta25_db_user:oKAcibWmspK0cbgP@cluster0.61vmyt1.mongodb.net/?appName=Cluster0"
-KAPSO_API_KEY = "d7a9dd3a062d70357c9cd21b1f3d81f8644e4fe0a0c0d41dd3dec7a38cf3810e"
+KAPSO_API_KEY = "67d30f40d1f73775087a3287"
 
-# 2. Setup MongoDB Connection
-try:
-    client = MongoClient(MONGO_URI, tlsCAFile=certifi.where())
-    db = client["WhatsAppAgent"]
-    chat_history = db["ChatHistory"]
-    print("✅ Connected to MongoDB Atlas successfully.")
-except Exception as e:
-    print(f"❌ MongoDB Connection Error: {e}")
+client = MongoClient(MONGO_URI, tlsCAFile=certifi.where())
+db = client["EnterpriseAgent"] 
+chat_history = db["ChatHistory"]
+stores_col = db["Stores"]
+brands_col = db["Brands"]
 
-def send_whatsapp_escalation(manager_phone, customer_phone, last_msg):
-    """Fires the high-priority alert to the Manager"""
+DECAY_THRESHOLD_MINUTES = 1
+
+def send_dynamic_escalation(manager_phone, customer_phone, brand_name, signature):
+    """Fires a brand-specific alert to the correct manager"""
     url = "https://app.kapso.ai/api/v1/whatsapp_messages"
     headers = {"X-API-Key": KAPSO_API_KEY, "Content-Type": "application/json"}
     
     text = (
-        f"🚨 *ON-GROUND: LEAD DECAY ALERT*\n\n"
-        f"Athlete *{customer_phone}* is stalling!\n"
-        f"💬 *Last Query:* \"{last_msg[:50]}...\"\n"
-        f"⏳ *Wait Time:* >24 Hours (Demo: >1 Min)\n\n"
-        f"📍 *Action Required:* Reply 'Claim' to the customer chat NOW to prevent revenue leakage. Just Do It."
+        f"🚨 *{brand_name.upper()} LEAD DECAY* 🚨\n\n"
+        f"Customer *{customer_phone}* is stalling!\n"
+        f"⏳ *Wait Time:* >{DECAY_THRESHOLD_MINUTES} Minute(s)\n\n"
+        f"📍 *Action:* Open the Kapso Inbox and click 'Claim' to assist this lead immediately.\n\n"
+        f"{signature}"
     )
     
     payload = {
@@ -38,38 +37,45 @@ def send_whatsapp_escalation(manager_phone, customer_phone, last_msg):
         }
     }
     
-    response = requests.post(url, headers=headers, json=payload)
-    if response.status_code in [200, 201]:
-        print(f"🚀 Escalated lead {customer_phone} to Manager {manager_phone}")
-    else:
-        print(f"❌ Kapso Error: {response.status_code} | {response.text}")
+    try:
+        response = requests.post(url, headers=headers, json=payload)
+        if response.status_code in [200, 201]:
+            print(f"🚀 Escalated {brand_name} lead {customer_phone} to Manager {manager_phone}")
+    except Exception as e:
+        print(f"❌ Alert Error: {e}")
 
 def run_retention_audit():
-    print(f"🔍 Auditor Active... Checking for ghosted leads.")
+    print(f"🔍 Auditor Active at {datetime.now().strftime('%H:%M:%S')}... Scanning for ghosted leads.")
     
-    # DEMO THRESHOLD: 1 minute 
-    # (Matches the timestamp format saved in your main.py)
-    threshold = datetime.datetime.utcnow() - datetime.timedelta(minutes=1)
+    threshold = datetime.utcnow() - timedelta(minutes=DECAY_THRESHOLD_MINUTES)
     
-    # Find leads that are NOT handled and were last updated > 1 min ago
-    stalled_leads = chat_history.find({
+    stalled_leads = list(chat_history.find({
         "is_handled": False,
         "timestamp": {"$lt": threshold}
-    })
+    }))
 
-    found_leads = False
+    if not stalled_leads:
+        print("✨ No lead leakage detected across brands.")
+        return
+
     for lead in stalled_leads:
-        found_leads = True
         customer = lead.get("phone_number")
-        last_msg = lead.get("user_msg", "New lead intent detected.")
+        brand_id = lead.get("brand_id", "NIKE_IND") 
         
-        # Using your phone number for the escalation alert
-        manager_to_alert = "919437725393" 
+        brand_config = brands_col.find_one({"brand_id": brand_id})
         
-        send_whatsapp_escalation(manager_to_alert, customer, last_msg)
-
-    if not found_leads:
-        print("✨ All athletes are currently being served. No lead leakage.")
+        store_config = stores_col.find_one({"brand_id": brand_id})
+        
+        if brand_config and store_config:
+            manager_phone = store_config["manager_phone"]
+            brand_name = brand_config["brand_name"]
+            signature = brand_config["signature"]
+            
+            send_dynamic_escalation(manager_phone, customer, brand_name, signature)
+            
+            chat_history.update_one({"_id": lead["_id"]}, {"$set": {"is_handled": "ALERTED"}})
 
 if __name__ == "__main__":
-    run_retention_audit()
+    while True:
+        run_retention_audit()
+        time.sleep(30)
