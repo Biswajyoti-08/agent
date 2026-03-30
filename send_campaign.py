@@ -7,17 +7,20 @@ MONGO_URI = "mongodb+srv://mohapatrasamanta25_db_user:oKAcibWmspK0cbgP@cluster0.
 client = MongoClient(MONGO_URI, tlsCAFile=certifi.where())
 db = client["EnterpriseAgent"]
 campaigns_col = db["Campaigns"]
-stores_col = db["Stores"]
 
 KAPSO_API_KEY = "ba4daeaf0baa99aef4ef48511b71de95168751a6af6a247dab949be0af96a4ef"
 RECIPIENTS = ["919437725393"]
 
 def trigger_dynamic_campaign(brand_id):
     campaign = campaigns_col.find_one({"brand_id": brand_id, "status": "active"})
+<<<<<<< HEAD
     
     if not campaign:
         print(f"❌ No active campaign found for {brand_id}")
         return
+=======
+    if not campaign: return
+>>>>>>> 0cd7471 (Local Sync: Bulletproof payload and Guided Intent logic)
 
     url = "https://app.kapso.ai/api/v1/whatsapp_messages"
     headers = {"X-API-Key": KAPSO_API_KEY, "Content-Type": "application/json"}
@@ -33,18 +36,25 @@ def trigger_dynamic_campaign(brand_id):
                     "type": "button",
                     "body": {"text": body_text},
                     "action": {
+<<<<<<< HEAD
                         "buttons": [
                             {"type": "reply", "reply": {"id": "find_store", "title": "Find Nearest Store"}}
                         ]
+=======
+                        "buttons": [{"type": "reply", "reply": {"id": "find_store", "title": "Find Nearest Store"}}]
+>>>>>>> 0cd7471 (Local Sync: Bulletproof payload and Guided Intent logic)
                     }
                 }
             }
         }
         
         response = requests.post(url, headers=headers, json=payload)
-        
         if response.status_code == 201:
+<<<<<<< HEAD
             print(f"✅ SUCCESS: '{campaign['campaign_name']}' delivered!")
+=======
+            print(f"✅ SUCCESS: Campaign delivered to {phone}")
+>>>>>>> 0cd7471 (Local Sync: Bulletproof payload and Guided Intent logic)
         else:
             print(f"⚠️ FAILED: {response.status_code} - {response.text}")
 
