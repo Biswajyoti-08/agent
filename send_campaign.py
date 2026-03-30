@@ -1,4 +1,3 @@
-import os
 import requests
 import certifi
 from pymongo import MongoClient
@@ -23,8 +22,8 @@ def trigger_dynamic_campaign(brand_id):
     headers = {"X-API-Key": KAPSO_API_KEY, "Content-Type": "application/json"}
     
     for phone in RECIPIENTS:
-        # Static replacement for demo reliability
-        body_text = campaign["template_text"].replace("{{store}}", "Brigade Road Hub")
+        # Use a simple string for the body to avoid formatting errors
+        body_text = "🚀 Official Air Jordan 10 Rio Launch! Athlete, find your nearest Nike Hub for an exclusive trial."
         
         payload = {
             "message": {
@@ -34,7 +33,12 @@ def trigger_dynamic_campaign(brand_id):
                     "type": "button",
                     "body": {"text": body_text},
                     "action": {
-                        "buttons": [{"type": "reply", "reply": {"id": "find_store", "title": "Find Nearest Store"}}]
+                        "buttons": [
+                            {
+                                "type": "reply", 
+                                "reply": {"id": "find_store", "title": "Find Store"}
+                            }
+                        ]
                     }
                 }
             }
