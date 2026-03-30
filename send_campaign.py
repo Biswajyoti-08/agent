@@ -6,41 +6,28 @@ from pymongo import MongoClient
 MONGO_URI = "mongodb+srv://mohapatrasamanta25_db_user:oKAcibWmspK0cbgP@cluster0.61vmyt1.mongodb.net/?appName=Cluster0"
 client = MongoClient(MONGO_URI, tlsCAFile=certifi.where())
 db = client["EnterpriseAgent"]
-campaigns_col = db["Campaigns"]
 
 # 2. Updated Kapso Key
 KAPSO_API_KEY = "ba4daeaf0baa99aef4ef48511b71de95168751a6af6a247dab949be0af96a4ef"
 RECIPIENTS = ["919437725393"]
 
 def trigger_dynamic_campaign(brand_id):
-    campaign = campaigns_col.find_one({"brand_id": brand_id, "status": "active"})
-    if not campaign: 
-        print("❌ No active campaign found.")
-        return
-
     url = "https://app.kapso.ai/api/v1/whatsapp_messages"
     headers = {"X-API-Key": KAPSO_API_KEY, "Content-Type": "application/json"}
     
     for phone in RECIPIENTS:
-        # Use a simple string for the body to avoid formatting errors
-        body_text = "🚀 Official Air Jordan 10 Rio Launch! Athlete, find your nearest Nike Hub for an exclusive trial."
+        # We use a clean text message with a clear instruction
+        body_text = (
+            "🚀 *NIKE RIO LAUNCH* 🚀\n\n"
+            "Athlete, the Air Jordan 10 Rio is here! Find your nearest Nike Hub for an exclusive trial.\n\n"
+            "👉 Reply with *'Find Store'* to start your journey. Just Do It."
+        )
         
         payload = {
             "message": {
                 "phone_number": phone,
-                "message_type": "interactive",
-                "interactive": {
-                    "type": "button",
-                    "body": {"text": body_text},
-                    "action": {
-                        "buttons": [
-                            {
-                                "type": "reply", 
-                                "reply": {"id": "find_store", "title": "Find Store"}
-                            }
-                        ]
-                    }
-                }
+                "message_type": "text",
+                "content": body_text
             }
         }
         
