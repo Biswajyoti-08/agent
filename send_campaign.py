@@ -9,7 +9,7 @@ db = client["EnterpriseAgent"]
 campaigns_col = db["Campaigns"]
 stores_col = db["Stores"]
 
-KAPSO_API_KEY = "67d30f40d1f73775087a3287"
+KAPSO_API_KEY = "ba4daeaf0baa99aef4ef48511b71de95168751a6af6a247dab949be0af96a4ef"
 RECIPIENTS = ["919437725393"]
 
 def trigger_dynamic_campaign(brand_id):
