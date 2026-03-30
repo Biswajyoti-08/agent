@@ -6,7 +6,7 @@ from pymongo import MongoClient
 from datetime import datetime, timedelta
 
 MONGO_URI = "mongodb+srv://mohapatrasamanta25_db_user:oKAcibWmspK0cbgP@cluster0.61vmyt1.mongodb.net/?appName=Cluster0"
-KAPSO_API_KEY = "67d30f40d1f73775087a3287"
+KAPSO_API_KEY = "ba4daeaf0baa99aef4ef48511b71de95168751a6af6a247dab949be0af96a4ef"
 
 client = MongoClient(MONGO_URI, tlsCAFile=certifi.where())
 db = client["EnterpriseAgent"]
