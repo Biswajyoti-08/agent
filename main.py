@@ -33,11 +33,9 @@ async def enterprise_webhook(request: Request):
         payload = await request.json()
         msg_data = payload.get("message", {})
         sender = msg_data.get("from") or msg_data.get("phone_number")
-        
-        # 1. Brand Context
         brand = brands_col.find_one({"brand_id": "NIKE_IND"})
-        
-        # 2. Location Logic (The Core Feature)
+
+        # --- 2. LOCATION LOGIC (With Memory Bridge) ---
         location = msg_data.get("location")
         if location:
             u_lat, u_lon = location.get("latitude"), location.get("longitude")
@@ -47,33 +45,48 @@ async def enterprise_webhook(request: Request):
                 for s in stores: s["dist"] = get_distance(u_lat, u_lon, s.get("lat"), s.get("lon"))
                 best = min(stores, key=lambda x: x["dist"])
                 
-                # Clean Text Response
+                # Update AI Memory so it doesn't ask for location again
+                chat_history.insert_one({
+                    "phone_number": sender, 
+                    "user_msg": "[Shared Location Pin]", 
+                    "ai_reply": f"SYSTEM_NOTE: Successfully guided user to {best.get('store_name')}.",
+                    "goal_reached": True,
+                    "timestamp": datetime.utcnow()
+                })
+
                 response = (
                     f"📍 *Nearest {brand.get('brand_name')} Store Found!*\n\n"
                     f"Name: {best.get('store_name')}\n"
                     f"Distance: {round(best['dist'], 1)} km\n"
                     f"Get Directions: {best.get('maps_url')}\n\n"
-                    f"{brand.get('signature', 'Just Do It.')}"
+                    f"I'm here if you need anything else. {brand.get('signature', 'Just Do It.')}"
                 )
                 send_text(sender, response)
 
-                # Manager Alert (Simple Text)
                 mgr_phone = brand.get("manager_phone")
                 if mgr_phone:
-                    alert = f"🚨 *NEW LEAD*: {sender} is looking for the {best.get('store_name')} store. Jump in if needed!"
+                    alert = f"🚨 *NEW LEAD*: {sender} is heading to {best.get('store_name')}. Check in if needed!"
                     send_text(mgr_phone, alert)
                 
-                return {"status": "success"}
+                return {"status": "routed"}
 
-        # 3. AI Concierge (Text Only)
+        # --- 3. AI CONCIERGE ENGINE (Context Aware) ---
         user_text = msg_data.get("text", {}).get("body") or ""
-        if not user_text: return {"status": "no_content"}
+        if not user_text: return {"status": "ignore"}
 
-        history = list(chat_history.find({"phone_number": sender}).sort("_id", -1).limit(3))
+        # Fetch history to check if goal was reached
+        history = list(chat_history.find({"phone_number": sender}).sort("_id", -1).limit(5))
+        goal_reached = any(h.get("goal_reached") for h in history)
         history.reverse()
         
-        prompt = f"System: {brand.get('persona')}. Goal: {brand.get('nudge_goal')}. Signature: {brand.get('signature')}"
-        messages = [{"role": "system", "content": prompt}]
+        # Dynamic System Prompt
+        instruction = "Be a helpful Nike manager. "
+        if goal_reached:
+            instruction += "The user has already found the store. Be polite, say you're welcome, and ask if they need anything else. Do NOT ask for location."
+        else:
+            instruction += "If they want a store, tell them to share their 'Current Location' using the (📎 > Location) icon."
+
+        messages = [{"role": "system", "content": f"{instruction} Persona: {brand.get('persona')} Signature: {brand.get('signature')}"}]
         for doc in history:
             messages.append({"role": "user", "content": doc.get("user_msg")})
             messages.append({"role": "assistant", "content": doc.get("ai_reply")})
@@ -90,9 +103,9 @@ async def enterprise_webhook(request: Request):
 
     except Exception as e:
         print(f"Error: {e}")
-        return {"status": "error_logged"}
+        return {"status": "error_handled"}
 
     return {"status": "success"}
 
 @app.get("/")
-def home(): return {"status": "Lean Retail AI Online"}
+def home(): return {"status": "Retail AI OS Online"}
