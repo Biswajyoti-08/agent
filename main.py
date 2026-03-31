@@ -1,5 +1,5 @@
 import os, requests, certifi, math
-from datetime import datetime
+from datetime import datetime, timedelta
 from fastapi import FastAPI, Request
 from pymongo import MongoClient
 from groq import Groq
@@ -34,9 +34,43 @@ async def enterprise_webhook(request: Request):
         msg_data = payload.get("message", {})
         sender = msg_data.get("from") or msg_data.get("phone_number")
         brand = brands_col.find_one({"brand_id": "NIKE_IND"})
+        mgr_phone = brand.get("manager_phone")
 
-        # --- 2. LOCATION LOGIC (With Memory Bridge) ---
+        # --- 1. SEAMLESS HANDOFF (Manager Detection) ---
+        if sender == mgr_phone:
+            # When manager speaks, we identify which customer they are talking to
+            # This logic assumes the manager is replying to a specific thread
+            customer_phone = msg_data.get("to") 
+            chat_history.update_many(
+                {"phone_number": customer_phone},
+                {"$set": {"is_human_active": True, "last_human_ts": datetime.utcnow()}}
+            )
+            print(f"Manager in control for {customer_phone}. AI Silenced.")
+            return {"status": "manager_speaking_ai_silenced"}
+
+        # --- 2. VOICE & TEXT INTEGRATION ---
+        # Prioritize text, fallback to Kapso's voice transcription
+        user_text = msg_data.get("text", {}).get("body")
+        if not user_text:
+            user_text = msg_data.get("audio", {}).get("transcription")
+
         location = msg_data.get("location")
+        if not user_text and not location:
+            return {"status": "ignore_empty_payload"}
+
+        # --- 3. SILENCE CHECK (Auto-Release Logic) ---
+        current_state = chat_history.find_one({"phone_number": sender}, sort=[("_id", -1)])
+        if current_state and current_state.get("is_human_active"):
+            last_ts = current_state.get("last_human_ts")
+            # If manager spoke in the last 30 mins, AI stays silent
+            if last_ts and (datetime.utcnow() - last_ts) < timedelta(minutes=30):
+                print(f"AI Silent: Human is handling {sender}")
+                return {"status": "human_in_control"}
+            else:
+                # Auto-release if manager hasn't spoken for 30 mins
+                chat_history.update_many({"phone_number": sender}, {"$set": {"is_human_active": False}})
+
+        # --- 4. LOCATION LOGIC (With Memory Bridge) ---
         if location:
             u_lat, u_lon = location.get("latitude"), location.get("longitude")
             stores = list(stores_col.find({"brand_id": "NIKE_IND"}))
@@ -45,13 +79,13 @@ async def enterprise_webhook(request: Request):
                 for s in stores: s["dist"] = get_distance(u_lat, u_lon, s.get("lat"), s.get("lon"))
                 best = min(stores, key=lambda x: x["dist"])
                 
-                # Update AI Memory so it doesn't ask for location again
                 chat_history.insert_one({
                     "phone_number": sender, 
-                    "user_msg": "[Shared Location Pin]", 
-                    "ai_reply": f"SYSTEM_NOTE: Successfully guided user to {best.get('store_name')}.",
+                    "user_msg": "[Location Shared]", 
+                    "ai_reply": f"SYSTEM_NOTE: Guided user to {best.get('store_name')}.",
                     "goal_reached": True,
-                    "timestamp": datetime.utcnow()
+                    "timestamp": datetime.utcnow(),
+                    "is_human_active": False
                 })
 
                 response = (
@@ -63,28 +97,22 @@ async def enterprise_webhook(request: Request):
                 )
                 send_text(sender, response)
 
-                mgr_phone = brand.get("manager_phone")
                 if mgr_phone:
-                    alert = f"🚨 *NEW LEAD*: {sender} is heading to {best.get('store_name')}. Check in if needed!"
+                    alert = f"🚨 *NEW LEAD*: {sender} is heading to {best.get('store_name')}. Jump in to assist!"
                     send_text(mgr_phone, alert)
                 
                 return {"status": "routed"}
 
-        # --- 3. AI CONCIERGE ENGINE (Context Aware) ---
-        user_text = msg_data.get("text", {}).get("body") or ""
-        if not user_text: return {"status": "ignore"}
-
-        # Fetch history to check if goal was reached
+        # --- 5. AI CONCIERGE ENGINE ---
         history = list(chat_history.find({"phone_number": sender}).sort("_id", -1).limit(5))
         goal_reached = any(h.get("goal_reached") for h in history)
         history.reverse()
         
-        # Dynamic System Prompt
-        instruction = "Be a helpful Nike manager. "
+        instruction = "You are a professional Nike Manager. "
         if goal_reached:
-            instruction += "The user has already found the store. Be polite, say you're welcome, and ask if they need anything else. Do NOT ask for location."
+            instruction += "The Athlete has found the store. Be polite and helpful. Do NOT ask for location again."
         else:
-            instruction += "If they want a store, tell them to share their 'Current Location' using the (📎 > Location) icon."
+            instruction += "If they need a store, ask them to click (📎 > Location) to share their 'Current Location' pin."
 
         messages = [{"role": "system", "content": f"{instruction} Persona: {brand.get('persona')} Signature: {brand.get('signature')}"}]
         for doc in history:
@@ -97,7 +125,7 @@ async def enterprise_webhook(request: Request):
 
         chat_history.insert_one({
             "phone_number": sender, "user_msg": user_text, "ai_reply": ai_reply, 
-            "timestamp": datetime.utcnow()
+            "timestamp": datetime.utcnow(), "is_human_active": False
         })
         send_text(sender, ai_reply)
 
@@ -108,4 +136,4 @@ async def enterprise_webhook(request: Request):
     return {"status": "success"}
 
 @app.get("/")
-def home(): return {"status": "Retail AI OS Online"}
+def home(): return {"status": "Retail AI OS Online - Seamless Handoff Active"}
