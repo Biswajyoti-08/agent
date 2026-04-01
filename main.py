@@ -6,7 +6,7 @@ from groq import Groq
 
 app = FastAPI()
 
-# 1. Clients & DB
+# 1. Clients & DB Setup
 groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 kapso_api_key = os.environ.get("KAPSO_API_KEY")
 mongo_client = MongoClient(os.environ.get("MONGO_URI"), tlsCAFile=certifi.where())
@@ -30,15 +30,11 @@ def send_text(phone, text):
     return requests.post(url, headers=headers, json=payload)
 
 def check_triage(text):
-    """LLM Router: Detects if a human is needed for complex/angry queries."""
+    """LLM Router: Silently detects if a human manager is needed."""
     triage_prompt = f"""
     Analyze this Nike Athlete message: "{text}"
     Determine if this needs a HUMAN MANAGER.
-    Criteria for ESCALATION:
-    1. Anger or extreme frustration.
-    2. Explicit request for a human/person/manager.
-    3. Complex issues: Bulk orders, manufacturing defects, or refund disputes.
-    
+    Criteria: Anger, explicit human request, or complex issues (Bulk, Defect, Refund).
     Reply ONLY with 'ESCALATE' or 'AI_HANDLE'.
     """
     check = groq_client.chat.completions.create(
@@ -57,36 +53,40 @@ async def enterprise_webhook(request: Request):
         mgr_phone = brand.get("manager_phone")
         user_text = msg_data.get("text", {}).get("body") or ""
 
-        # --- 1. MANAGER TRACKING & SILENCING ---
+        # --- 1. MANAGER TRACKING (Now with String Casting for Streamlit) ---
         if sender == mgr_phone:
-            customer_phone = msg_data.get("to")
+            # Capturing the athlete's number from the 'to' field in Kapso
+            customer_phone = msg_data.get("to") or msg_data.get("recipient_id")
             if customer_phone:
-                # Log Manager's message for Dashboard Transcript Audit
                 chat_history.insert_one({
-                    "phone_number": customer_phone,
+                    "phone_number": str(customer_phone), # String cast for DB consistency
                     "manager_msg": user_text,
                     "is_human_active": True,
                     "last_human_interaction": datetime.utcnow(),
                     "timestamp": datetime.utcnow()
                 })
-            return {"status": "manager_logged_ai_silenced"}
+            return {"status": "manager_logged"}
 
-        # --- 2. INTELLIGENT TRIAGE (Complex Intent Detection) ---
+        # --- 2. STEALTH TRIAGE (Escalates without telling the user) ---
         if user_text and check_triage(user_text):
-            chat_history.update_many({"phone_number": sender}, {"$set": {"is_human_active": True, "last_human_interaction": datetime.utcnow()}})
+            chat_history.update_many(
+                {"phone_number": str(sender)}, 
+                {"$set": {"is_human_active": True, "last_human_interaction": datetime.utcnow()}}
+            )
             alert = f"⚠️ *URGENT ESCALATION*: Athlete {sender} has a complex issue: {user_text}"
             send_text(mgr_phone, alert)
-            send_text(sender, "I've detected this requires expert assistance. I'm bringing in a Nike Store Manager to help you right away! 👟")
-            return {"status": "escalated_to_human"}
+            # We don't send a text to the user here to keep it 'Stealth'
 
-        # --- 3. CHECK AI SILENCE STATUS (TTL Logic) ---
-        user_state = chat_history.find_one({"phone_number": sender}, sort=[("_id", -1)])
+        # --- 3. CHECK AI SILENCE STATUS (Refined to 5-Minute Window) ---
+        user_state = chat_history.find_one({"phone_number": str(sender)}, sort=[("_id", -1)])
         if user_state and user_state.get("is_human_active"):
             last_interaction = user_state.get("last_human_interaction")
-            if last_interaction and (datetime.utcnow() - last_interaction) < timedelta(minutes=30):
+            # If manager spoke in last 5 mins, AI stays silent
+            if last_interaction and (datetime.utcnow() - last_interaction) < timedelta(minutes=5):
                 return {"status": "ai_muted_human_is_handling"}
             else:
-                chat_history.update_many({"phone_number": sender}, {"$set": {"is_human_active": False}})
+                # 5 mins passed, AI regains control automatically
+                chat_history.update_many({"phone_number": str(sender)}, {"$set": {"is_human_active": False}})
 
         # --- 4. LOCATION LOGIC ---
         location = msg_data.get("location")
@@ -98,7 +98,7 @@ async def enterprise_webhook(request: Request):
                 best = min(stores, key=lambda x: x["dist"])
                 
                 chat_history.insert_one({
-                    "phone_number": sender, 
+                    "phone_number": str(sender), 
                     "user_msg": "[Shared Location Pin]", 
                     "ai_reply": f"SYSTEM_NOTE: Found {best.get('store_name')}. Goal achieved.",
                     "goal_reached": True,
@@ -118,15 +118,17 @@ async def enterprise_webhook(request: Request):
                 return {"status": "routed"}
 
         # --- 5. NATURAL LANGUAGE AI ENGINE ---
-        history = list(chat_history.find({"phone_number": sender}).sort("_id", -1).limit(5))
+        if not user_text: return {"status": "ignore"}
+        
+        history = list(chat_history.find({"phone_number": str(sender)}).sort("_id", -1).limit(5))
         goal_reached = any(h.get("goal_reached") for h in history)
         history.reverse()
         
-        instruction = "You are a professional Nike Concierge. Avoid robotic scripts. "
+        instruction = "You are a professional Nike Concierge. Use natural, athletic language. "
         if goal_reached:
-            instruction += "The Athlete found a store. Be helpful with gear/stock questions, but DON'T ask for location."
+            instruction += "Athlete found a store. Answer gear questions but DON'T ask for location."
         else:
-            instruction += "If they want a store, guide them to click (📎 > Location) to share their 'Current Location' pin."
+            instruction += "If they want a store, guide them to click (📎 > Location) to share their pin."
 
         messages = [{"role": "system", "content": f"{instruction} Persona: {brand.get('persona')} Signature: {brand.get('signature')}"}]
         for doc in history:
@@ -138,7 +140,7 @@ async def enterprise_webhook(request: Request):
         ai_reply = completion.choices[0].message.content
 
         chat_history.insert_one({
-            "phone_number": sender, "user_msg": user_text, "ai_reply": ai_reply, "timestamp": datetime.utcnow()
+            "phone_number": str(sender), "user_msg": user_text, "ai_reply": ai_reply, "timestamp": datetime.utcnow()
         })
         send_text(sender, ai_reply)
 
@@ -148,4 +150,4 @@ async def enterprise_webhook(request: Request):
     return {"status": "success"}
 
 @app.get("/")
-def home(): return {"status": "Retail AI OS Online - Intelligence Active"}
+def home(): return {"status": "Retail AI OS Online - Stealth Triage Active"}
