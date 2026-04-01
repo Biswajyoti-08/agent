@@ -1,64 +1,46 @@
 import streamlit as st
 from pymongo import MongoClient
 import pandas as pd
-from datetime import datetime, timedelta
 import os
 
-# 1. Setup & Connection
-st.set_page_config(page_title="Nike India - Control Tower", layout="wide")
-MONGO_URI = os.environ.get("MONGO_URI") # Use your same URI
-client = MongoClient(MONGO_URI)
+# Fix for Python 3.13/Streamlit Crash
+# Run using: python -m streamlit run dashboard.py --server.fileWatcherType none
+
+st.set_page_config(page_title="Nike Control Tower", layout="wide")
+client = MongoClient(os.environ.get("MONGO_URI"))
 db = client["EnterpriseAgent"]
-chat_history = db["ChatHistory"]
 
-st.title("👟 Nike India: Retail AI Control Tower")
-st.markdown("---")
+st.title("👟 Nike India: Retail Operations Control Tower")
 
-# 2. Sidebar Filters
-st.sidebar.header("Filters")
-time_range = st.sidebar.selectbox("Time Range", ["Last 24 Hours", "Last 7 Days", "All Time"])
-
-# 3. Data Retrieval
+# 1. Pull Data
 def get_data():
-    data = list(chat_history.find().sort("timestamp", -1))
-    return pd.DataFrame(data)
+    return pd.DataFrame(list(db["ChatHistory"].find().sort("timestamp", -1)))
 
 df = get_data()
 
 if not df.empty:
-    # 4. KPI Metrics
-    col1, col2, col3, col4 = st.columns(4)
-    
+    # 2. KPI Section
     total_leads = len(df['phone_number'].unique())
-    active_human = len(df[df['is_human_active'] == True]['phone_number'].unique())
-    goals_met = len(df[df['goal_reached'] == True]['phone_number'].unique())
+    escalated = len(df[df['is_human_active'] == True]['phone_number'].unique())
     
-    col1.metric("Total Athletes", total_leads)
-    col2.metric("Goals Reached (Store Found)", goals_met)
-    col3.metric("Human Handover Active", active_human)
-    col4.metric("AI-Only Chats", total_leads - active_human)
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Total Athletes", total_leads)
+    c2.metric("Human Handover Active", escalated)
+    c3.metric("AI Efficiency", f"{int((1 - escalated/total_leads)*100)}%")
 
-    st.markdown("### 🚨 High-Priority Lead Decay")
-    st.info("These Athletes found a store but haven't been contacted by a Manager yet.")
+    # 3. TRANSCRIPT MONITORING (Management Oversight)
+    st.subheader("📋 Live Conversation Monitor")
+    selected_user = st.selectbox("Select Athlete Phone to Audit", df['phone_number'].unique())
     
-    # Logic: Goal Reached is True, but Human hasn't taken over
-    decay_leads = df[(df['goal_reached'] == True) & (df['is_human_active'] != True)]
+    user_df = df[df['phone_number'] == selected_user].sort_values("timestamp")
     
-    if not decay_leads.empty:
-        # Displaying specific columns for the manager
-        display_df = decay_leads[['phone_number', 'timestamp', 'ai_reply']].copy()
-        display_df.columns = ['Athlete Phone', 'Last Interaction', 'AI Last Action']
-        st.table(display_df.head(10))
-    else:
-        st.success("All high-intent leads are being handled! No decay detected.")
-
-    st.markdown("### 📋 Recent Activity Feed")
-    st.dataframe(df[['timestamp', 'phone_number', 'user_msg', 'ai_reply', 'is_human_active']].head(20), use_container_width=True)
+    for _, row in user_df.iterrows():
+        if pd.notnull(row.get('user_msg')):
+            st.chat_message("user").write(row['user_msg'])
+        if pd.notnull(row.get('ai_reply')):
+            st.chat_message("assistant", avatar="👟").write(row['ai_reply'])
+        if pd.notnull(row.get('manager_msg')):
+            st.chat_message("assistant", avatar="👨‍💼").write(f"**MANAGER:** {row['manager_msg']}")
 
 else:
-    st.warning("No chat data found in MongoDB. Start a conversation to see data!")
-
-# Auto-refresh logic (every 30 seconds)
-# st.empty()
-# time.sleep(30)
-# st.rerun()
+    st.write("Waiting for data...")
