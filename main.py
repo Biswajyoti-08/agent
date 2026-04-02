@@ -3,10 +3,14 @@ from datetime import datetime, timedelta
 from fastapi import FastAPI, Request, Response
 from pymongo import MongoClient
 from groq import Groq
+from dotenv import load_dotenv
+
+# Load environment variables from .env file (for local development)
+load_dotenv()
 
 app = FastAPI()
 
-# 1. Clients & DB Setup (Environment Variables Only)
+# 1. Clients & DB Setup
 groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 kapso_api_key = os.environ.get("KAPSO_API_KEY")
 mongo_client = MongoClient(os.environ.get("MONGO_URI"), tlsCAFile=certifi.where())
@@ -16,7 +20,7 @@ db = mongo_client["EnterpriseAgent"]
 chat_history = db["ChatHistory"]
 brands_col = db["Brands"]
 stores_col = db["Stores"]
-processed_msg_ids = db["ProcessedMessages"] # Idempotency layer
+processed_msg_ids = db["ProcessedMessages"] 
 
 # --- HELPER FUNCTIONS ---
 
@@ -42,7 +46,7 @@ def check_triage(text):
     check = groq_client.chat.completions.create(
         messages=[{"role": "user", "content": triage_prompt}],
         model="llama-3.1-8b-instant",
-        temperature=0 # Strict enforcement
+        temperature=0
     )
     return "ESCALATE" in check.choices[0].message.content.upper()
 
@@ -54,7 +58,7 @@ async def enterprise_webhook(request: Request):
     msg_id = msg_data.get("id") or msg_data.get("message_id")
     
     if processed_msg_ids.find_one({"msg_id": msg_id}):
-        return Response(status_code=200) # Ignore duplicate retries from Kapso
+        return Response(status_code=200)
     processed_msg_ids.insert_one({"msg_id": msg_id, "created_at": datetime.utcnow()})
 
     try:
@@ -82,14 +86,9 @@ async def enterprise_webhook(request: Request):
                 {"phone_number": sender}, 
                 {"$set": {"is_human_active": True, "last_human_interaction": datetime.utcnow()}}
             )
-            # Alert Manager
             alert = f"⚠️ *URGENT ESCALATION*: Athlete {sender} has a complex issue: {user_text}"
             send_text(mgr_phone, alert)
-            
-            # Send Holding Message to Athlete
             send_text(sender, "That's a great question. Let me have our Store Manager grab those details for you. One moment! 👟")
-            
-            # CRITICAL: Stop the AI from generating a hallucinated response!
             return {"status": "escalated_and_muted"}
 
         # --- 3. CHECK AI SILENCE STATUS (5-Minute Window) ---
@@ -135,11 +134,10 @@ async def enterprise_webhook(request: Request):
         
         history = list(chat_history.find({"phone_number": sender}).sort("_id", -1).limit(5))
         goal_reached = any(h.get("goal_reached") for h in history)
-        history.reverse() # Chronological order
+        history.reverse() 
         
-        # Strict Persona Guardrails
         instruction = (
-            "You are a high end Nike Concierge. BE CONCISE. "
+            "You are a high-end Nike Concierge. BE CONCISE. Max 2 paragraphs. "
             "Never offer discounts, negotiate, or use slang. "
         )
         if goal_reached:
@@ -149,14 +147,12 @@ async def enterprise_webhook(request: Request):
 
         messages = [{"role": "system", "content": f"{instruction} Persona: {brand.get('persona')}"}]
         
-        # Build Context (Including Manager's Interventions!)
         for doc in history:
             if doc.get("user_msg"): 
                 messages.append({"role": "user", "content": doc.get("user_msg")})
             if doc.get("ai_reply"): 
                 messages.append({"role": "assistant", "content": doc.get("ai_reply")})
             if doc.get("manager_msg"): 
-                # This ensures the AI knows exactly what the human manager said
                 messages.append({"role": "assistant", "content": f"[Human Manager intervened]: {doc.get('manager_msg')}"})
                 
         messages.append({"role": "user", "content": user_text})
@@ -164,7 +160,7 @@ async def enterprise_webhook(request: Request):
         completion = groq_client.chat.completions.create(
             messages=messages, 
             model="llama-3.1-8b-instant",
-            max_tokens=150 # Force conciseness
+            max_tokens=150
         )
         ai_reply = completion.choices[0].message.content
 

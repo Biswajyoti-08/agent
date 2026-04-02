@@ -1,9 +1,11 @@
-import streamlit as st
-from pymongo import MongoClient
-import pandas as pd
 import os
+import streamlit as st
+import pandas as pd
+from pymongo import MongoClient
+from dotenv import load_dotenv
 
-# Fix for Python 3.13/Streamlit Crash
+load_dotenv()
+
 # Run using: python -m streamlit run dashboard.py --server.fileWatcherType none
 
 st.set_page_config(page_title="Nike Control Tower", layout="wide")
@@ -12,23 +14,22 @@ db = client["EnterpriseAgent"]
 
 st.title("👟 Nike India: Retail Operations Control Tower")
 
-# 1. Pull Data
 def get_data():
     return pd.DataFrame(list(db["ChatHistory"].find().sort("timestamp", -1)))
 
 df = get_data()
 
 if not df.empty:
-    # 2. KPI Section
     total_leads = len(df['phone_number'].unique())
     escalated = len(df[df['is_human_active'] == True]['phone_number'].unique())
     
     c1, c2, c3 = st.columns(3)
     c1.metric("Total Athletes", total_leads)
     c2.metric("Human Handover Active", escalated)
-    c3.metric("AI Efficiency", f"{int((1 - escalated/total_leads)*100)}%")
+    
+    efficiency = f"{int((1 - escalated/total_leads)*100)}%" if total_leads > 0 else "N/A"
+    c3.metric("AI Efficiency", efficiency)
 
-    # 3. TRANSCRIPT MONITORING (Management Oversight)
     st.subheader("📋 Live Conversation Monitor")
     selected_user = st.selectbox("Select Athlete Phone to Audit", df['phone_number'].unique())
     

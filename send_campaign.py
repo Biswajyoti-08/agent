@@ -2,22 +2,22 @@ import os
 import requests
 import certifi
 from pymongo import MongoClient
+from dotenv import load_dotenv
 
-# 1. Configuration via Environment Variables
+load_dotenv()
+
+# Configuration via Environment Variables
 MONGO_URI = os.environ.get("MONGO_URI")
 KAPSO_API_KEY = os.environ.get("KAPSO_API_KEY")
-
-# Target phone (You can also make this an env var if you prefer: os.environ.get("TARGET_PHONE"))
 RECIPIENTS = ["918280244245"] 
 
 def trigger_dynamic_campaign(campaign_id):
     if not MONGO_URI or not KAPSO_API_KEY:
-        print("❌ Error: Security keys missing. Please set MONGO_URI and KAPSO_API_KEY environment variables.")
+        print("❌ Error: Security keys missing. Please set MONGO_URI and KAPSO_API_KEY.")
         return
 
     print(f"🚀 Initializing Campaign: {campaign_id}...")
     
-    # Initialize DB Connection
     client = MongoClient(MONGO_URI, tlsCAFile=certifi.where())
     db = client["EnterpriseAgent"]
     campaigns_col = db["Campaigns"]
@@ -25,14 +25,12 @@ def trigger_dynamic_campaign(campaign_id):
     url = "https://app.kapso.ai/api/v1/whatsapp_messages"
     headers = {"X-API-Key": KAPSO_API_KEY, "Content-Type": "application/json"}
     
-    # Fetch campaign template
     campaign = campaigns_col.find_one({"campaign_id": campaign_id})
     if not campaign:
         print(f"❌ Error: Campaign '{campaign_id}' not found in MongoDB.")
         return
 
     image_url = campaign.get("media_url")
-    # Replace the {{store}} placeholder with localized data
     body_text = campaign.get("template_text").replace("{{store}}", "Nike India Hubs")
 
     for phone in RECIPIENTS:
