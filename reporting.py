@@ -1,27 +1,30 @@
+import os
 import certifi
 import requests
 from pymongo import MongoClient
 from datetime import datetime, timedelta
 
-# 1. Configuration
-MONGO_URI = "mongodb+srv://mohapatrasamanta25_db_user:oKAcibWmspK0cbgP@cluster0.61vmyt1.mongodb.net/?appName=Cluster0"
-KAPSO_API_KEY = "ba4daeaf0baa99aef4ef48511b71de95168751a6af6a247dab949be0af96a4ef"
+# 1. Configuration via Environment Variables
+MONGO_URI = os.environ.get("MONGO_URI")
+KAPSO_API_KEY = os.environ.get("KAPSO_API_KEY")
 COUNTRY_MANAGER_PHONE = "919437725393"
 
-client = MongoClient(MONGO_URI, tlsCAFile=certifi.where())
-db = client["EnterpriseAgent"]
-chat_history = db["ChatHistory"]
-brands_col = db["Brands"]
-
 def generate_weekly_risk_report():
+    if not MONGO_URI or not KAPSO_API_KEY:
+        print("❌ Error: Security keys missing. Please set MONGO_URI and KAPSO_API_KEY environment variables.")
+        return
+
     print(f"📊 Scanning for Ghosted Leads... {datetime.now().date()}")
+    
+    # Initialize DB Connection
+    client = MongoClient(MONGO_URI, tlsCAFile=certifi.where())
+    db = client["EnterpriseAgent"]
+    chat_history = db["ChatHistory"]
     
     # Define the time window (Last 7 Days)
     one_week_ago = datetime.utcnow() - timedelta(days=7)
     
-    # CRITICAL LOGIC: 
-    # Find leads that were ESCALATED (is_human_active: True) 
-    # BUT have NO manager response recorded (manager_msg does not exist)
+    # CRITICAL LOGIC: Find escalated leads with NO manager response
     risk_leads = list(chat_history.find({
         "is_human_active": True,
         "manager_msg": {"$exists": False},
@@ -29,8 +32,7 @@ def generate_weekly_risk_report():
     }))
 
     if not risk_leads:
-        print("✅ Success: All high-intent leads have been handled by managers.")
-        # Optional: Send a 'All Clear' message to the Country Manager
+        print("✅ Success: All high-intent leads have been handled by managers. Clean sheet!")
         return
 
     # 2. Construct the Report
@@ -43,11 +45,9 @@ def generate_weekly_risk_report():
 
     for lead in risk_leads:
         phone = lead.get("phone_number", "Unknown")
-        # For simplicity, we assume Nike India for this demo
-        brand_name = "Nike India" 
+        brand_name = "Nike India" # Defaulting to Nike India for this execution
         brand_counts[brand_name] = brand_counts.get(brand_name, 0) + 1
         
-        # Add timestamp of when they were ghosted
         time_str = lead.get("timestamp").strftime("%d %b, %H:%M")
         lead_details += f"• *{phone}* (Escalated: {time_str})\n"
 
