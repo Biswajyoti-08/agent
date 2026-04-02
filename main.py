@@ -5,17 +5,17 @@ from pymongo import MongoClient
 from groq import Groq
 from dotenv import load_dotenv
 
-# Load environment variables for security
 load_dotenv()
 
 app = FastAPI()
 
-# --- 1. CLIENTS & DB SETUP ---
+# 1. Clients & DB Setup
 groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 kapso_api_key = os.environ.get("KAPSO_API_KEY")
 mongo_client = MongoClient(os.environ.get("MONGO_URI"), tlsCAFile=certifi.where())
 db = mongo_client["EnterpriseAgent"]
 
+# Collections
 chat_history = db["ChatHistory"]
 brands_col = db["Brands"]
 stores_col = db["Stores"]
@@ -30,29 +30,30 @@ def get_distance(lat1, lon1, lat2, lon2):
     return R * 2 * math.asin(math.sqrt(a))
 
 def send_text(phone, text):
-    """X-RAY LOGGING: Catches Kapso rejections instead of failing silently."""
+    """X-Ray Sending: Logs Kapso failures to Render for debugging."""
     url = "https://app.kapso.ai/api/v1/whatsapp_messages"
     headers = {"X-API-Key": kapso_api_key, "Content-Type": "application/json"}
     payload = {"message": {"phone_number": phone, "content": text, "message_type": "text"}}
-    
     try:
         response = requests.post(url, headers=headers, json=payload)
         if response.status_code not in [200, 201]:
-            print(f"❌ KAPSO SEND ERROR to {phone}: {response.text}")
-        else:
-            print(f"✅ Successfully sent message to {phone}")
+            print(f"❌ KAPSO ERROR: {response.text}")
         return response
     except Exception as e:
-        print(f"❌ NETWORK ERROR sending to {phone}: {e}")
+        print(f"❌ NETWORK ERROR: {e}")
         return None
 
 def check_triage(text):
-    """STRICT GUARDRAIL: Binary output to prevent hallucinated handoffs."""
+    """LLM Router: Uses strict criteria to detect if a human manager is needed."""
     triage_prompt = f"""
-    Analyze this message from a Nike Athlete: "{text}"
-    Does this message ask for a discount, mention a bulk order, ask for a refund, or express anger?
-    Reply with ONLY the word "ESCALATE" if yes. 
-    Reply with ONLY the word "AI_HANDLE" if no.
+    Analyze this Nike Athlete message: "{text}"
+    Determine if this needs a HUMAN MANAGER.
+    Criteria:
+    1. Anger or extreme frustration.
+    2. Explicit human request (e.g., "let me talk to a person").
+    3. Complex issues: Bulk orders, manufacturing defects, or refund disputes.
+    
+    Reply ONLY with 'ESCALATE' or 'AI_HANDLE'.
     """
     try:
         check = groq_client.chat.completions.create(
@@ -61,13 +62,11 @@ def check_triage(text):
             temperature=0
         )
         result = check.choices[0].message.content.strip().upper()
-        print(f"🔍 TRIAGE LOG | User: '{text}' | Groq Decided: '{result}'")
+        print(f"🔍 TRIAGE DECISION: {result}")
         return "ESCALATE" in result
     except Exception as e:
         print(f"❌ TRIAGE CRASH: {e}")
         return False
-
-# --- CORE WEBHOOK ---
 
 @app.post("/webhook")
 async def enterprise_webhook(request: Request):
@@ -75,14 +74,14 @@ async def enterprise_webhook(request: Request):
     msg_data = payload.get("message", {})
     msg_id = msg_data.get("id") or msg_data.get("message_id")
     
-    # 0. Anti-Spam / Idempotency
+    # --- 0. ANTI-SPAM ---
     if msg_id and processed_msg_ids.find_one({"msg_id": msg_id}):
         return Response(status_code=200)
     if msg_id:
         processed_msg_ids.insert_one({"msg_id": msg_id, "created_at": datetime.utcnow()})
 
     try:
-        # KAPSO BLINDSPOT FIX: Detect outbound messages from the Kapso Web Sandbox
+        # Detect direction to handle Kapso Web Sandbox replies
         direction = msg_data.get("direction")
         is_dashboard_reply = (direction == "outbound")
         
@@ -91,11 +90,12 @@ async def enterprise_webhook(request: Request):
         brand = brands_col.find_one({"brand_id": "NIKE_IND"})
         mgr_phone = brand.get("manager_phone")
 
-        print(f"\n--- NEW WEBHOOK EVENT | Sender/Target: {sender} | Direction: {direction} ---")
+        print(f"\n--- INCOMING: {sender} | TEXT: {user_text} ---")
 
-        # --- 1. MANAGER TRACKING (Handles WhatsApp Phone AND Kapso Web Sandbox) ---
+        # --- 1. MANAGER TRACKING (Handles WhatsApp & Kapso Sandbox) ---
         if sender == mgr_phone or is_dashboard_reply:
-            print("👨‍💼 Manager message detected. Locking AI.")
+            print("👨‍💼 MANAGER DETECTED: Silencing AI & Resetting Timer.")
+            # Identify customer phone from payload 'to' field if outbound
             customer_phone = str(msg_data.get("to") or msg_data.get("recipient_id") or sender)
             
             if user_text:
@@ -106,52 +106,50 @@ async def enterprise_webhook(request: Request):
                     "last_human_interaction": datetime.utcnow(),
                     "timestamp": datetime.utcnow()
                 })
-                # Lock the AI and reset the global timer for this user
+                # Lock status and reset clock
                 chat_history.update_many(
                     {"phone_number": customer_phone}, 
                     {"$set": {"is_human_active": True, "last_human_interaction": datetime.utcnow()}}
                 )
-            return {"status": "manager_logged"}
+            return {"status": "manager_active_ai_silenced"}
 
-        # --- 2. STEALTH TRIAGE (Escalation Wall) ---
+        # --- 2. INTELLIGENT TRIAGE (Escalation Wall) ---
         if user_text and check_triage(user_text):
-            print("⚠️ ESCALATION TRIGGERED! Halting AI.")
+            print("⚠️ ESCALATING: Detection of complex intent.")
             chat_history.update_many(
                 {"phone_number": sender}, 
                 {"$set": {"is_human_active": True, "last_human_interaction": datetime.utcnow()}}
             )
-            print(f"🚨 Alerting Manager at {mgr_phone}...")
-            send_text(mgr_phone, f"⚠️ *URGENT ESCALATION*: Athlete {sender} has a complex issue: {user_text}")
-            send_text(sender, "That's a great question. Let me have our Store Manager grab those details for you. One moment! 👟")
-            return {"status": "escalated_and_muted"}
+            alert = f"⚠️ *URGENT ESCALATION*: Athlete {sender} has a complex issue: {user_text}"
+            send_text(mgr_phone, alert)
+            send_text(sender, "I've detected this requires expert assistance. I'm bringing in a Nike Store Manager to help you right away! 👟")
+            return {"status": "escalated_to_human"}
 
-        # --- 3. CHECK AI SILENCE STATUS (The Sliding Window Timer Fix) ---
+        # --- 3. CHECK AI SILENCE STATUS (Sliding Window TTL) ---
         user_state = chat_history.find_one({"phone_number": sender}, sort=[("_id", -1)])
         if user_state and user_state.get("is_human_active"):
             last_interaction = user_state.get("last_human_interaction")
+            # 5-Minute Sliding Window (Reset by manager/user activity)
             if last_interaction and (datetime.utcnow() - last_interaction) < timedelta(minutes=5):
-                print("🔇 AI is MUTED. Logging user reply and extending the 5-minute timer.")
-                # Log the user's message while muted AND restart the 5-minute clock
+                print("🔇 AI MUTED: Human handling is active. Logging user text.")
+                # Log user text while muted to maintain transcript
                 chat_history.insert_one({
                     "phone_number": sender, 
                     "user_msg": user_text, 
                     "is_human_active": True,
-                    "last_human_interaction": datetime.utcnow(), 
+                    "last_human_interaction": datetime.utcnow(), # Reset timer on user reply
                     "timestamp": datetime.utcnow()
                 })
-                chat_history.update_many(
-                    {"phone_number": sender}, 
-                    {"$set": {"last_human_interaction": datetime.utcnow()}}
-                )
-                return {"status": "ai_muted_human_is_handling"}
+                chat_history.update_many({"phone_number": sender}, {"$set": {"last_interaction": datetime.utcnow()}})
+                return {"status": "ai_muted_active_handover"}
             else:
-                print("🔊 5-minute silence window expired. AI regaining control.")
+                print("🔊 TIMEOUT: AI regaining control.")
                 chat_history.update_many({"phone_number": sender}, {"$set": {"is_human_active": False}})
 
         # --- 4. LOCATION LOGIC ---
         location = msg_data.get("location")
         if location:
-            print("📍 Location pin received!")
+            print("📍 LOCATION PIN: Calculating nearest store.")
             u_lat, u_lon = location.get("latitude"), location.get("longitude")
             stores = list(stores_col.find({"brand_id": "NIKE_IND"}))
             if stores:
@@ -159,11 +157,8 @@ async def enterprise_webhook(request: Request):
                 best = min(stores, key=lambda x: x["dist"])
                 
                 chat_history.insert_one({
-                    "phone_number": sender, 
-                    "user_msg": "[Shared Location Pin]", 
-                    "ai_reply": f"SYSTEM_NOTE: Found {best.get('store_name')}.",
-                    "goal_reached": True,
-                    "timestamp": datetime.utcnow()
+                    "phone_number": sender, "user_msg": "[Shared Location Pin]", 
+                    "ai_reply": f"SYSTEM: Found {best.get('store_name')}", "goal_reached": True, "timestamp": datetime.utcnow()
                 })
 
                 response = (
@@ -174,42 +169,34 @@ async def enterprise_webhook(request: Request):
                     f"I'm here if you need anything else. {brand.get('signature', 'Just Do It.')}"
                 )
                 send_text(sender, response)
-                
                 if mgr_phone:
-                    print(f"🚨 Attempting to send Location Alert to Manager at {mgr_phone}...")
                     send_text(mgr_phone, f"🚨 *NEW LEAD*: {sender} is heading to {best.get('store_name')}.")
-                else:
-                    print("⚠️ Manager phone not found in DB!")
                 return {"status": "routed"}
 
-        # --- 5. PROFESSIONAL AI CONCIERGE ---
+        # --- 5. NATURAL LANGUAGE AI ENGINE ---
         if not user_text: return {"status": "ignore"}
         
-        print("🤖 Generating AI Response...")
+        print("🤖 AI GENERATING RESPONSE...")
         history = list(chat_history.find({"phone_number": sender}).sort("_id", -1).limit(5))
         goal_reached = any(h.get("goal_reached") for h in history)
-        history.reverse() 
+        history.reverse()
         
         instruction = (
-            "You are a high-end Nike Concierge. BE CONCISE. Max 2 paragraphs. "
-            "Never offer discounts, negotiate, or use slang. Never suggest wholesale ordering. "
-            "If they ask for something you can't do, tell them a manager is needed."
+            "You are a professional Nike Concierge. Be concise (max 2 paragraphs). "
+            "Avoid robotic scripts and never suggest wholesale/emails. "
         )
         if goal_reached:
-            instruction += "The Athlete already found a store. Answer product questions directly."
+            instruction += "Athlete found a store. Be helpful with gear, but DON'T ask for location."
         else:
-            instruction += "Your goal is to guide them to click (📎 > Location) to share their pin."
+            instruction += "If they want a store, guide them to click (📎 > Location) to share their pin."
 
-        messages = [{"role": "system", "content": f"{instruction} Persona: {brand.get('persona')}"}]
-        
+        messages = [{"role": "system", "content": f"{instruction} Persona: {brand.get('persona')} Signature: {brand.get('signature')}"}]
         for doc in history:
             if doc.get("user_msg"): messages.append({"role": "user", "content": doc.get("user_msg")})
             if doc.get("ai_reply"): messages.append({"role": "assistant", "content": doc.get("ai_reply")})
-            if doc.get("manager_msg"): messages.append({"role": "assistant", "content": f"[Human Manager intervened]: {doc.get('manager_msg')}"})
-                
+            if doc.get("manager_msg"): messages.append({"role": "assistant", "content": f"[Manager previously said]: {doc.get('manager_msg')}"})
         messages.append({"role": "user", "content": user_text})
 
-        # CUT-OFF FIX: Increased max_tokens from 150 to 300
         completion = groq_client.chat.completions.create(
             messages=messages, 
             model="llama-3.1-8b-instant",
@@ -218,19 +205,14 @@ async def enterprise_webhook(request: Request):
         ai_reply = completion.choices[0].message.content
 
         chat_history.insert_one({
-            "phone_number": sender, 
-            "user_msg": user_text, 
-            "ai_reply": ai_reply, 
-            "timestamp": datetime.utcnow()
+            "phone_number": sender, "user_msg": user_text, "ai_reply": ai_reply, "timestamp": datetime.utcnow()
         })
         send_text(sender, ai_reply)
-        print("✅ AI Response Sent successfully.")
 
     except Exception as e:
-        print(f"💥 FATAL WEBHOOK ERROR: {e}")
+        print(f"💥 WEBHOOK FATAL: {e}")
         return Response(status_code=500)
-        
     return Response(status_code=200)
 
 @app.get("/")
-def home(): return {"status": "Nike Retail OS Online - Enterprise Patch Applied"}
+def home(): return {"status": "Retail AI OS Online - Production Active"}
