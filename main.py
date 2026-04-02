@@ -9,13 +9,11 @@ load_dotenv()
 
 app = FastAPI()
 
-# 1. Clients & DB Setup
 groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 kapso_api_key = os.environ.get("KAPSO_API_KEY")
 mongo_client = MongoClient(os.environ.get("MONGO_URI"), tlsCAFile=certifi.where())
 db = mongo_client["EnterpriseAgent"]
 
-# Collections
 chat_history = db["ChatHistory"]
 brands_col = db["Brands"]
 stores_col = db["Stores"]
