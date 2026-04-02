@@ -9,7 +9,7 @@ load_dotenv()
 # Configuration via Environment Variables
 MONGO_URI = os.environ.get("MONGO_URI")
 KAPSO_API_KEY = os.environ.get("KAPSO_API_KEY")
-RECIPIENTS = ["918280244245"] 
+RECIPIENTS = ["918280244245","919008235018"] 
 
 def trigger_dynamic_campaign(campaign_id):
     if not MONGO_URI or not KAPSO_API_KEY:
