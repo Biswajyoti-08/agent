@@ -1,4 +1,3 @@
-import os
 import requests
 import certifi
 from pymongo import MongoClient
@@ -11,42 +10,41 @@ campaigns_col = db["Campaigns"]
 
 # 2. Kapso Configuration
 KAPSO_API_KEY = "ba4daeaf0baa99aef4ef48511b71de95168751a6af6a247dab949be0af96a4ef"
-RECIPIENTS = ["918280244245"] # Sending to your secondary 'Athlete' phone
+RECIPIENTS = ["918280244245"] 
 
 def trigger_dynamic_campaign(campaign_id):
+    print(f"🚀 Initializing Campaign: {campaign_id}...")
     url = "https://app.kapso.ai/api/v1/whatsapp_messages"
     headers = {"X-API-Key": KAPSO_API_KEY, "Content-Type": "application/json"}
     
-    # Fetch the campaign details from MongoDB
     campaign = campaigns_col.find_one({"campaign_id": campaign_id})
-    
     if not campaign:
-        print(f"❌ Error: Campaign {campaign_id} not found in Database.")
+        print(f"❌ Error: Campaign {campaign_id} not found.")
         return
 
-    # Extract Data
     image_url = campaign.get("media_url")
-    body_text = campaign.get("template_text")
+    # REPLACE THE PLACEHOLDER: {{store}} -> Nike India Hubs
+    body_text = campaign.get("template_text").replace("{{store}}", "Nike India Hubs")
 
     for phone in RECIPIENTS:
-        # Kapso Media Payload Structure
         payload = {
             "message": {
                 "phone_number": phone,
-                "message_type": "image",  # CRITICAL: Changed from 'text'
-                "media_url": image_url,   # The Unsplash link
-                "content": body_text      # This becomes the image caption
+                "message_type": "image",
+                "media_url": image_url,
+                "content": body_text,
+                "caption": body_text 
             }
         }
         
-        response = requests.post(url, headers=headers, json=payload)
-        
-        # Kapso usually returns 200 or 201 on success
-        if response.status_code in [200, 201]:
-            print(f"✅ SUCCESS: Visual Campaign delivered to {phone}")
-        else:
-            print(f"⚠️ FAILED: {response.status_code} - {response.text}")
+        try:
+            response = requests.post(url, headers=headers, json=payload)
+            if response.status_code in [200, 201]:
+                print(f"✅ SUCCESS: Visual Campaign delivered to {phone}")
+            else:
+                print(f"⚠️ FAILED: {response.status_code} - {response.text}")
+        except Exception as e:
+            print(f"⚠️ Connection Error: {e}")
 
 if __name__ == "__main__":
-    # Ensure this ID matches your MongoDB 'campaign_id'
     trigger_dynamic_campaign("NIKE_RIO_2026")
