@@ -47,7 +47,6 @@ def send_text(phone, text):
         }
     }
     
-    # CRITICAL: Watch this line in your Render Logs!
     print(f"📡 PAYLOAD BEING SENT: {payload}")
     
     try:
@@ -100,13 +99,15 @@ async def enterprise_webhook(request: Request):
         processed_msg_ids.insert_one({"msg_id": msg_id, "created_at": datetime.utcnow()})
 
     try:
-        # Kapso Sandbox Detect: Outbound direction or missing "from"
-        direction = str(payload.get("direction", "")).lower()
-        is_dashboard = (direction == "outbound") or (not msg_data.get("from"))
-        
-        sender = clean_phone(msg_data.get("from") or msg_data.get("phone_number"))
-        user_text = msg_data.get("text", {}).get("body") or ""
         brand = brands_col.find_one({"brand_id": "NIKE_IND"})
+        brand_phone = clean_phone(brand.get('brand_phone'))
+        sender = clean_phone(msg_data.get("from") or msg_data.get("phone_number"))
+        
+        # Kapso Sandbox Detect: Outbound direction or matching brand phone
+        direction = str(payload.get("direction", "")).lower()
+        is_dashboard = (direction == "outbound") or (sender == brand_phone)
+        
+        user_text = msg_data.get("text", {}).get("body") or ""
         mgr_phone = clean_phone(brand.get("manager_phone"))
 
         print(f"\n--- NEW EVENT | Sender: {sender} | Dashboard: {is_dashboard} ---")
@@ -120,6 +121,7 @@ async def enterprise_webhook(request: Request):
                     "phone_number": customer, "manager_msg": user_text,
                     "is_human_active": True, "last_human_interaction": datetime.utcnow(), "timestamp": datetime.utcnow()
                 })
+                # Reset the 5-min sliding window when manager speaks
                 chat_history.update_many({"phone_number": customer}, {"$set": {"is_human_active": True, "last_human_interaction": datetime.utcnow()}})
             return {"status": "manager_active"}
 
@@ -128,7 +130,6 @@ async def enterprise_webhook(request: Request):
             print("⚠️ ESCALATION TRIGGERED.")
             chat_history.update_many({"phone_number": sender}, {"$set": {"is_human_active": True, "last_human_interaction": datetime.utcnow()}})
             
-            # Send alert to Manager if phone exists
             if mgr_phone:
                 send_text(mgr_phone, f"⚠️ *URGENT ESCALATION*: Athlete {sender} says: {user_text}")
             else:
@@ -137,15 +138,25 @@ async def enterprise_webhook(request: Request):
             send_text(sender, "I've detected this requires expert assistance. I'm bringing in a Nike Store Manager to help you right away! 👟")
             return {"status": "escalated"}
 
-        # --- 3. SILENCE TIMER (30 Min Sliding Window) ---
+        # --- 3. SILENCE TIMER (5-Minute Sliding Window) ---
         user_state = chat_history.find_one({"phone_number": sender}, sort=[("_id", -1)])
         if user_state and user_state.get("is_human_active"):
             last_interaction = user_state.get("last_human_interaction")
-            if last_interaction and (datetime.utcnow() - last_interaction) < timedelta(minutes=30):
-                print("🔇 AI MUTED. Extending window.")
+            
+            # Check if we are within the 5-minute window
+            if last_interaction and (datetime.utcnow() - last_interaction) < timedelta(minutes=5):
+                print("🔇 AI MUTED. Sliding window extended by user reply.")
+                # SLIDING WINDOW: Reset the timer to 5 minutes starting NOW because the user replied
                 chat_history.update_many({"phone_number": sender}, {"$set": {"last_human_interaction": datetime.utcnow()}})
+                
+                # Log user message so manager can see it in history, but don't let AI reply
+                if user_text:
+                    chat_history.insert_one({
+                        "phone_number": sender, "user_msg": user_text, "timestamp": datetime.utcnow()
+                    })
                 return {"status": "muted"}
             else:
+                print("🔊 5-MINUTE WINDOW EXPIRED. AI resuming control.")
                 chat_history.update_many({"phone_number": sender}, {"$set": {"is_human_active": False}})
 
         # --- 4. LOCATION LOGIC ---
@@ -200,4 +211,4 @@ async def enterprise_webhook(request: Request):
     return Response(status_code=200)
 
 @app.get("/")
-def home(): return {"status": "Enterprise AI OS - Intelligence Active"}
+def home(): return {"status": "Enterprise AI OS - 5 Min Sliding Window Active"}
