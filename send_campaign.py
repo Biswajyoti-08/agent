@@ -12,7 +12,7 @@ MONGO_URI = os.environ.get("MONGO_URI")
 KAPSO_API_KEY = os.environ.get("KAPSO_API_KEY")
 
 # List of target recipients
-RECIPIENTS = ["919437725393"] 
+RECIPIENTS = ["919437725393","919008235018"] 
 
 def clean_phone(phone):
     """Strips all non-digit characters from the phone number string."""
