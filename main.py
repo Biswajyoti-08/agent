@@ -47,7 +47,7 @@ async def create_indexes():
     # FIX: unique index on msg_id — hard DB-level backstop against race conditions.
     # Even if two requests pass the find_one_and_update simultaneously,
     # MongoDB will reject the second insert at the storage layer.
-    await dedup_col.create_index("msg_id", unique=True, sparse=True)
+    await dedup_col.create_index("msg_id", unique=True)
     await state_col.create_index("phone_number", unique=True)
     await chat_col.create_index([("phone_number", 1), ("timestamp", -1)])
 
