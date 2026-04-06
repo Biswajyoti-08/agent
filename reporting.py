@@ -7,58 +7,56 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Configuration via Environment Variables
+# Configuration
 MONGO_URI = os.environ.get("MONGO_URI")
 KAPSO_API_KEY = os.environ.get("KAPSO_API_KEY")
-COUNTRY_MANAGER_PHONE = "919437725393"
+COUNTRY_MANAGER_PHONE = "919437725393" # Target for the alert
 
-def generate_weekly_risk_report():
+def generate_regional_risk_report():
     if not MONGO_URI or not KAPSO_API_KEY:
-        print("❌ Error: Security keys missing. Please set MONGO_URI and KAPSO_API_KEY.")
+        print("❌ Error: Environment keys missing.")
         return
 
-    print(f"📊 Scanning for Ghosted Leads... {datetime.now().date()}")
-    
     client = MongoClient(MONGO_URI, tlsCAFile=certifi.where())
     db = client["EnterpriseAgent"]
-    chat_history = db["ChatHistory"]
+    chat_col = db["ChatHistory"]
     
-    one_week_ago = datetime.utcnow() - timedelta(days=7)
+    # Analyze the last 7 days
+    time_limit = datetime.utcnow() - timedelta(days=7)
     
-    risk_leads = list(chat_history.find({
-        "is_human_active": True,
-        "manager_msg": {"$exists": False},
-        "timestamp": {"$gt": one_week_ago}
-    }))
+    # Logic: Find users who are 'escalated' but have 0 'manager_msg' in their history
+    # We aggregate to find the 'Last Known Status' per athlete
+    pipeline = [
+        {"$match": {"timestamp": {"$gt": time_limit}}},
+        {"$sort": {"timestamp": -1}},
+        {"$group": {
+            "_id": "$phone_number",
+            "last_msg": {"$first": "$$ROOT"},
+            "has_manager_reply": {"$max": {"$cond": [{"$gt": ["$manager_msg", None]}, 1, 0]}}
+        }},
+        {"$match": {"last_msg.muted": True, "has_manager_reply": 0}}
+    ]
+    
+    ghosted_leads = list(chat_col.aggregate(pipeline))
 
-    if not risk_leads:
-        print("✅ Success: All high-intent leads have been handled by managers. Clean sheet!")
+    if not ghosted_leads:
+        print("✅ Clean Sheet: All escalated athletes have been handled.")
         return
 
-    report = "🚨 *NIKE REGIONAL RISK REPORT*\n"
+    # Build the Executive Report
+    report = "🚨 *NIKE INDIA: REGIONAL RISK REPORT*\n"
     report += "_________________________________\n\n"
-    report += "The following High-Intent Leads were escalated but have NOT received a human response:\n\n"
+    report += f"Total Athletes Ghosted: *{len(ghosted_leads)}*\n"
+    report += "The following high-intent leads are stuck in 'Escalated' status without a human reply:\n\n"
     
-    brand_counts = {}
-    lead_details = ""
+    for lead in ghosted_leads:
+        phone = lead["_id"]
+        timestamp = lead["last_msg"]["timestamp"].strftime("%d %b, %H:%M")
+        report += f"• *{phone}* (Waiting since {timestamp})\n"
 
-    for lead in risk_leads:
-        phone = lead.get("phone_number", "Unknown")
-        brand_name = "Nike India" 
-        brand_counts[brand_name] = brand_counts.get(brand_name, 0) + 1
-        
-        time_str = lead.get("timestamp").strftime("%d %b, %H:%M")
-        lead_details += f"• *{phone}* (Escalated: {time_str})\n"
+    report += "\n⚠️ *Action:* Store Managers must check the Kapso Inbox immediately to prevent revenue loss."
 
-    for name, count in brand_counts.items():
-        report += f"🔸 *{name}:* {count} Athletes Ghosted.\n"
-
-    report += "\n📋 *Detailed Lead List:*\n"
-    report += lead_details
-    
-    report += f"\n📉 *Total Revenue at Risk:* {len(risk_leads)} Leads"
-    report += "\n\n⚠️ *Action Required:* Ensure Store Managers monitor the Kapso Inbox for 'Urgent Escalation' alerts."
-
+    # Send via Kapso
     url = "https://app.kapso.ai/api/v1/whatsapp_messages"
     headers = {"X-API-Key": KAPSO_API_KEY, "Content-Type": "application/json"}
     payload = {
@@ -70,13 +68,11 @@ def generate_weekly_risk_report():
     }
     
     try:
-        response = requests.post(url, headers=headers, json=payload)
-        if response.status_code in [200, 201]:
-            print(f"📈 Report sent! {len(risk_leads)} leaks reported to Country Manager.")
-        else:
-            print(f"❌ Kapso Error: {response.text}")
+        r = requests.post(url, headers=headers, json=payload)
+        if r.status_code in [200, 201]:
+            print(f"📈 Risk Report delivered to Country Manager. Total Risk: {len(ghosted_leads)} leads.")
     except Exception as e:
-        print(f"⚠️ Connection Error: {e}")
+        print(f"💥 Failed to send report: {e}")
 
 if __name__ == "__main__":
-    generate_weekly_risk_report()
+    generate_regional_risk_report()
