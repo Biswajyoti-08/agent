@@ -236,7 +236,7 @@ async def build_messages(brand: dict, sender: str, current_text: str) -> list:
             messages.append({"role": "assistant", "content": doc["ai_reply"]})
         if doc.get("manager_msg"):
             messages.append({"role": "assistant",
-                             "content": f"[Specialist said]: {doc['manager_msg']}"})
+                             "content": f"[(Team Update) Our Nike Specialist previously told you]: {doc['manager_msg']}"})
 
     messages.append({"role": "user", "content": current_text})
     return messages
