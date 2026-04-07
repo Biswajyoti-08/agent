@@ -177,12 +177,12 @@ Reply ONLY: ESCALATE or AI_HANDLE"""
         return False   # fail-open: don't spam manager on triage outage
 
 async def is_muted(sender: str) -> bool:
-    """30-min sliding window using UserState — never touches ChatHistory."""
+    """1-min sliding window using UserState — never touches ChatHistory."""
     doc = await state_col.find_one({"phone_number": sender})
     if not doc or not doc.get("is_human_active"):
         return False
     last = doc.get("last_human_interaction")
-    if last and (datetime.utcnow() - last) < timedelta(minutes=30):
+    if last and (datetime.utcnow() - last) < timedelta(minutes=1):
         await state_col.update_one(
             {"phone_number": sender},
             {"$set": {"last_human_interaction": datetime.utcnow()}}
